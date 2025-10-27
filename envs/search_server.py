@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-High-throughput search engine server optimized for 10k+ requests/sec
-Key optimizations: larger queues, faster timeouts, efficient batching
+python search_server.py --host 0.0.0.0 --port 8000
 """
 
 import os
@@ -10,6 +9,7 @@ import time
 import pickle
 import re
 import logging
+import argparse
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,9 +36,10 @@ logger = logging.getLogger(__name__)
 uvicorn_logger = logging.getLogger("uvicorn.access")
 uvicorn_logger.disabled = True
 
-MODEL_NAME = '/mnt/hdfs/weiweis/search/Qwen3-Embedding-8B'
-CORPUS = "/mnt/hdfs/weiweis/search/corpus.jsonl"
-CORPUS_EMBEDDING: str = "/mnt/hdfs/weiweis/search/corpus_embeddings.pkl"
+MODEL_NAME = 'Qwen/Qwen3-Embedding-8B'
+CORPUS_DATASET = "Tevatron/browsecomp-plus-corpus"
+CORPUS_EMBEDDING_DATASET = "miaolu3/browsecomp-plus"
+CORPUS_EMBEDDING_FILE = "corpus_embeddings.pkl"
 
 @dataclass
 class SearchRequest:
@@ -127,9 +128,9 @@ def keep_first_n_words(text: str, n: int = 1000) -> str:
 
 
 def load_corpus():
-    """Load the corpus dataset"""
-    print("Loading corpus dataset...")
-    ds = [json.loads(x) for x in open(CORPUS)]
+    """Load the corpus dataset from HuggingFace"""
+    print(f"Loading corpus dataset from {CORPUS_DATASET}...")
+    ds = load_dataset(CORPUS_DATASET, split='train')
     docid_to_text = {row["docid"]: {
         'raw': keep_first_n_words(row["text"], 15000),
         'content': keep_first_n_words(row["text"], 1000),
@@ -142,11 +143,18 @@ def load_corpus():
 
 
 def encode_corpus():
-    """Encode corpus using multiple GPUs and cache embeddings"""
-    if os.path.exists(CORPUS_EMBEDDING):
-        print(f"Loading cached corpus embeddings from {CORPUS_EMBEDDING}")
-        with open(CORPUS_EMBEDDING, 'rb') as f:
-            return pickle.load(f)
+    """Load corpus embeddings from HuggingFace dataset"""
+    from huggingface_hub import hf_hub_download
+
+    print(f"Downloading corpus embeddings from {CORPUS_EMBEDDING_DATASET}...")
+    embeddings_path = hf_hub_download(
+        repo_id=CORPUS_EMBEDDING_DATASET,
+        filename=CORPUS_EMBEDDING_FILE,
+        repo_type="dataset"
+    )
+    print(f"Loading corpus embeddings from {embeddings_path}...")
+    with open(embeddings_path, 'rb') as f:
+        return pickle.load(f)
 
 
 def high_speed_batcher(request_queue: mp.Queue, batch_queue: mp.Queue,
@@ -418,11 +426,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 @app.on_event("startup")
 async def startup_event():
     global search_server
-    num_gpus = int(os.getenv("NUM_GPUS", "8"))
+    detected_gpus = torch.cuda.device_count()
+    num_gpus = int(os.getenv("NUM_GPUS", str(detected_gpus)))
     max_batch_size = int(os.getenv("MAX_BATCH_SIZE", "2048"))  # Larger default
     batch_timeout = float(os.getenv("BATCH_TIMEOUT", "0.005"))  # 5ms default
 
-    print(f"🚀 Starting high-throughput server: {num_gpus} GPUs, batch={max_batch_size}, timeout={batch_timeout}s")
+    print(f"🚀 Starting search server: {num_gpus} GPUs, batch={max_batch_size}, timeout={batch_timeout}s")
 
     search_server = HighThroughputSearchServer(
         num_gpus=num_gpus, max_batch_size=max_batch_size, batch_timeout=batch_timeout)
@@ -515,7 +524,21 @@ def signal_handler(sig, frame):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default=MODEL_NAME)
+    parser.add_argument('--corpus', type=str, default=CORPUS_DATASET)
+    parser.add_argument('--corpus-embedding-dataset', type=str, default=CORPUS_EMBEDDING_DATASET)
+    parser.add_argument('--corpus-embedding-file', type=str, default=CORPUS_EMBEDDING_FILE)
+    parser.add_argument('--host', type=str, default='0.0.0.0')
+    parser.add_argument('--port', type=int, default=8000)
+    args = parser.parse_args()
+
+    MODEL_NAME = args.model
+    CORPUS_DATASET = args.corpus
+    CORPUS_EMBEDDING_DATASET = args.corpus_embedding_dataset
+    CORPUS_EMBEDDING_FILE = args.corpus_embedding_file
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    uvicorn.run(app, host="::", port=8000, workers=1, access_log=False)
+    uvicorn.run(app, host=args.host, port=args.port, workers=1, access_log=False)
