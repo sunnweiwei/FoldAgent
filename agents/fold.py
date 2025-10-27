@@ -362,7 +362,7 @@ async def process_single_batch(
         return
 
 
-@register_handler("agent/tool_use/lead_agent")
+@register_handler("agent/fold_agent")
 class ReActAgent(AsyncAgent):
     async def __call__(self, item: DataProto, context: TaskContext, **kwargs):
         return await process_single_batch(item, context)
