@@ -13,7 +13,7 @@ from verl import DataProto
 from .utils import CallLLM, Agent, select_env, truncate_text, is_weird
 from .prompts import create_chat
 from .prompts import BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE
-from .verifier.process_reward import judge_scope
+from .verifier import judge_scope
 
 
 def print_chat(chat):
@@ -74,7 +74,6 @@ async def process_single_batch(
         item: DataProto,
         context: TaskContext) -> DataProto:
     os.environ["no_proxy"] = ""
-    # tokenizer = context.tokenizer if async_tokenizer is None else async_tokenizer
     tokenizer = context.tokenizer
     config = context.config.actor_rollout_ref.rollout
     is_train = context.is_train
@@ -96,11 +95,9 @@ async def process_single_batch(
         print(f"[Error] during environment init: {str(e)}")
 
     user_prompt, agent_config = await env.get_data(item, context)
-
-    lead_version = getattr(config.plugin, "lead_version", None)
     workflow = item.non_tensor_batch['extra_info'][0].get('workflow', None) or getattr(config.plugin, "workflow",
-                                                                                       "ma_v2")
-    user_prompt = create_chat(env.instance_info['problem_statement'], lead_version, workflow, item)
+                                                                                       "search")
+    user_prompt = create_chat(env.instance_info['problem_statement'], workflow, item)
 
     if 'search' in workflow:
         branch_prompt = BRANCH_MESSAGE_SEARCH

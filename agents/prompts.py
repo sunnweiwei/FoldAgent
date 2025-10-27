@@ -1,10 +1,7 @@
 from .tool_spec import convert_tools_to_description, codeact_tool, search_tool, branch_tool, TOOL_PROMPT, PARALLEL_TOOL_PROMPT
 
 
-def create_chat(problem_statement, version=None, workflow=None, item=None):
-    if version is not None:
-        workflow = {1: 'ma_v1', 2: 'ma_v2'}.get(version, 'ma_v2')
-
+def create_chat(problem_statement, workflow=None, item=None):
     if workflow == 'code':
         tool_description = TOOL_PROMPT.format(description=convert_tools_to_description(codeact_tool()))
         system_prompt = CODE_SYSTEM_PROMPT + '\n\n' + tool_description
