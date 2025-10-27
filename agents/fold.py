@@ -171,7 +171,7 @@ async def process_single_batch(
                     session_timeout=session_timeout - time.time() + session_start_time,
                     should_continue=lambda resp: '<function=return>' not in resp,
                     safe_finish=lambda
-                        x: "You are in branch mode and cannot branch task or finish the task. Use the `return` tool to go back to the lead agent." if '<function=finish>' in x or '<function=branch>' in x else None,
+                        x: "You are in branch mode and cannot branch task or finish the task. Use the `return` tool to go back to the main agent." if '<function=finish>' in x or '<function=branch>' in x else None,
                     summary_prompt="The context limit has been exceeded for the branch. Please finish the sub task directly and clearly state the progress made and the pending jobs of the sub task. Only summarize the sub task progress, using the return tool.",
                     observation_prompt=f"* You are now in branch mode: {description}. Conduct the sub task based on instruction, and when you complete the assigned sub task, use return tool to return, do not perform action beyond the assigned sub task.",
                 )
