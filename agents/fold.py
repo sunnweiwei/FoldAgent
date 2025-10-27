@@ -33,6 +33,8 @@ def print_chat(chat):
             chat_str += '# ' + turn['role'] + '\n\n' + turn['content'] + "\n\n---\n\n"
     return chat_str
 
+def is_ipv6(ip):
+    return ':' in ip
 
 def extract_fn_call(text):
     if text is None:
@@ -117,7 +119,6 @@ async def process_single_batch(
     max_session = getattr(config.plugin, "max_session", 5)
     if not is_train:
         max_session = getattr(config.plugin, "val_max_session", max_session)
-    summary_ratio = getattr(config.plugin, "summary_ratio", 0.8)
     session_timeout = getattr(config.plugin, "session_timeout", 90 * 60)
     process_reward = getattr(config.plugin, "process_reward", None)
     if process_reward is not None and isinstance(process_reward, str) and process_reward.lower() == "none":
@@ -375,4 +376,4 @@ async def process_single_batch(
 @register_handler("agent/tool_use/lead_agent")
 class ReActAgent(AsyncAgent):
     async def __call__(self, item: DataProto, context: TaskContext, **kwargs):
-        return await process_single_batch(item, context, self.tokenizer)
+        return await process_single_batch(item, context)
