@@ -1,23 +1,16 @@
 import os
-import re
 import time
-import json
 import copy
-import asyncio
-import requests
-import collections
-import difflib
 import uuid
-from typing import Optional, Union
 from unittest.mock import patch
 from itertools import groupby
 import re, unicodedata
 
 import aiohttp
-import numpy as np
 import torch
 import asyncio, httpx
 from verl import DataProto
+from envs.local_search import LocalSearch
 
 
 def select_env(ability, config, extra_info=None):
@@ -26,7 +19,7 @@ def select_env(ability, config, extra_info=None):
         EnvClass = None  # TODO docker env
     elif 'LocalSearch' in ability:
         EnvClass = LocalSearch
-    else:  # legacy env
+    else:
         EnvClass = LocalSearch
     return EnvClass
 

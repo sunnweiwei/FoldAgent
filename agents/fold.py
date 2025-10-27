@@ -1,21 +1,13 @@
 import os
 import re
 import time
-import json
 import copy
 import asyncio
-import requests
-import collections
-from typing import Optional, Union
-from unittest.mock import patch
 from functools import partial
 import random
 
-import aiohttp
 import numpy as np
 import torch
-from transformers import PreTrainedTokenizer
-
 
 from verl import DataProto
 from .utils import CallLLM, Agent, select_env, truncate_text, is_weird
