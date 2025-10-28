@@ -64,7 +64,7 @@ python scripts/eval_bc.py --workflow search [...]
 python scripts/eval_bc.py --workflow search --enable_summary [...]
 ```
 
-### Using vLLM
+### Using Local LLMs (eg vLLM)
 ```bash
 # Start vLLM server
 vllm serve ByteDance-Seed/Seed-OSS-36B-Instruct --port 8001 --max-model-len 131072
