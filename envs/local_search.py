@@ -487,6 +487,7 @@ class LocalSearch:
                     explanation = fn['arguments'].get('explanation', None)
                     confidence = fn['arguments'].get('confidence', None)
                     if len(answer.strip()) == 0:
+                        print(response)
                         observation = ("Fail to parse answer. Please resubmit with the correct tool call format, eg\n"
                                        "<function=finish>\n" "<parameter=answer>YOUR ANSWER</parameter>\n"
                                        "<parameter=explanation>YOUR EXPLANATION</parameter>\n"

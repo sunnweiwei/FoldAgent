@@ -138,7 +138,7 @@ async def process_item(
         iteration += 1
 
         response = await agent['main'].step()
-        print(response)
+        # print(response)
 
         if response is None:
             break

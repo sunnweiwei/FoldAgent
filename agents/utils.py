@@ -233,7 +233,7 @@ class CallAPI:  # Call external API
         if max_tokens < 10:
             return None
         messages = kwargs.get('messages') or decode_conversation(input_ids, self.tokenizer)[0]
-        print("API Call", len(messages))
+        # print("API Call", len(messages))
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
