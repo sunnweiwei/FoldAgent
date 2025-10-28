@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from verl import DataProto
-from .utils import CallLLM, Agent, select_env, truncate_text, is_weird, TaskContext, CallAPI
+from .utils import CallLLM, Agent, select_env, truncate_text, is_weird, TaskContext, CallAPI, run_action
 from .prompts import create_chat
 from .prompts import BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE, SUMMARY_PROMPT_CODE, SUMMARY_PROMPT_SEARCH
 from .verifier import judge_scope
@@ -47,27 +47,6 @@ def clean_response(response):
     else:
         response = re.split(r'<\[[^\]]+\]>', response)[-1]
     return response
-
-
-
-async def run_action(env, response):
-    try:
-        try:
-            act = time.time()
-            env_return = await asyncio.wait_for(env.run_action(response), timeout=120.0)
-            if time.time() - act > 10:
-                print('Action Cost', time.time() - act)
-        except asyncio.TimeoutError:
-            print('[ACTION] Action timed out after 120 seconds')
-            env_return = {'observation': 'Action timed out after 120 seconds'}
-        if 'action' in env_return:
-            action, arguments = env_return['action'], env_return.get('arguments', {})
-            if action == 'finish':
-                return None
-        observation = env_return.pop('observation', 'Empty')
-    except Exception as e:
-        observation = f"Error: {e}"
-    return observation
 
 
 async def process_item(
