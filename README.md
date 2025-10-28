@@ -79,8 +79,8 @@ python scripts/eval_bc.py \
   --num_workers 32 \
   --prompt_length 16384 \
   --response_length 32768 \
-  --max_turn 100 \
-  --val_max_turn 100 \
+  --max_turn 200 \
+  --val_max_turn 200 \
   --max_session 10 \
   --val_max_session 10 \
   --output_dir results
