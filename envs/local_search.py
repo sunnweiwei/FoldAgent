@@ -193,6 +193,22 @@ async def call_openai(messages, model='gpt-5-nano', max_retries=3):
     return ""
 
 
+async def call_openai_raw(messages, model='gpt-4o-mini', max_retries=3):
+    from openai import AsyncOpenAI
+    if isinstance(messages, str):
+        messages = [{'role': 'user', 'content': messages}]
+    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    for attempt in range(max_retries):
+        try:
+            resp = await client.chat.completions.create(model=model, messages=messages)
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"[OPENAI] Error after {max_retries} attempts: {e}")
+                return f"Error: {e}"
+            await asyncio.sleep(1 * (attempt + 1))
+    return ""
+
 async def judge(question, correct_answer, predicted_answer):
     correct_answer = "Tobias Smollett" if "Tobias Smollet" in correct_answer else correct_answer  # fix
     correct_answer = "Biswaranjan Chattopadhyay" if "Biswaranjan Chattapadhyay" in correct_answer else correct_answer
@@ -210,14 +226,14 @@ async def judge(question, correct_answer, predicted_answer):
         messages = [{'role': 'user', 'content': judge_prompt}]
         score = 0
         for _ in range(3):
-            response = await call_openai(messages)
+            response = await call_openai_raw(messages)  # use call_openai for api proxy
             grade_report = parse_judge_response(response)
             if grade_report['parse_error']:
                 continue
             score = int(grade_report['correct'])
             break
         if score == 0 and relaxed_em(correct_answer, predicted_answer):
-            response = await call_openai(messages, model='gpt-4.1')
+            response = await call_openai_raw(messages, model='gpt-4.1')  # use call_openai for api proxy
             grade_report = parse_judge_response(response)
             score = int(grade_report.get('correct', 0))
 
@@ -432,7 +448,7 @@ class LocalSearch:
                             else:
                                 self.visited_pages.add(page['docid'])
                                 self.stats['visit_pages'] = len(self.visited_pages)
-                                page['text'] = " ".join(page['text'].split()[:256])  # 512
+                                page['text'] = " ".join(page['text'].split()[:512])  # 512
                                 show_topk += 1
                             observation += (
                                 f"\n--- #{i}: {page['docid']}---\n"
@@ -505,7 +521,7 @@ class LocalSearch:
                             observation = f"Answer submission failed. The answer is missing the following questions: {', '.join(missing)}. Make sure submit answer for all the questions. Ensure all the answers are submitted in one finish tool call."
                             return {'observation': observation.strip()}
 
-                    if self.double_check:
+                    if self.double_check:  # disabled
                         observation = f"""Before finalizing, perform this mandatory check.
 
 Check Against the Goal: Reread the user's original query: {self.question}. 
@@ -551,7 +567,7 @@ Once you’re confident everything is covered and verified, submit the final ans
 
     async def update_dataproto(self, out, item, messages, score, reward_dict, tag='main', metrics=None):
         final_score = score[1]
-        out.meta_info["xperf_metrics"] = metrics
+        out.meta_info["inference_metrics"] = metrics
         out.meta_info["generation_kwargs"] = item.meta_info['generation_kwargs']
         out.non_tensor_batch = copy.deepcopy(item.non_tensor_batch)
         out.non_tensor_batch["num_of_turns"] = np.array([len(messages)], dtype=object)

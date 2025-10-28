@@ -5,7 +5,10 @@ import uuid
 from unittest.mock import patch
 from itertools import groupby
 import re, unicodedata
-
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional
+from omegaconf import DictConfig
+from transformers import PreTrainedTokenizer
 import aiohttp
 import torch
 import asyncio, httpx
@@ -17,6 +20,8 @@ def select_env(ability, config, extra_info=None):
     # Select env
     if ability == 'swe':
         EnvClass = None  # TODO docker env
+    elif ability == 'swe_loc':
+        EnvClass = None  # TODO read-only swe env
     elif 'LocalSearch' in ability:
         EnvClass = LocalSearch
     else:
@@ -114,8 +119,13 @@ def is_weird(text, repeat_n=128, cjk_limit=128):
     cjk_count = sum(any(a <= ord(c) <= b for a, b in CJK) for c in s)
     return cjk_count >= cjk_limit or (len(s) > 0 and cjk_count / len(s) > 0.8)
 
-class CallLLM:
-    def __init__(self, url, tokenizer, config, meta_info):
+
+class CallLLM:  # Call policy LLM in RL env
+    def __init__(self, host, port, tokenizer, config, meta_info):
+        if ':' in host:
+            host = f'[{host}]'
+        url = f"http://{host}:{port}/chat/completions"
+
         self.url = url
         self.tokenizer = tokenizer
         self.config = config
@@ -197,6 +207,61 @@ class CallLLM:
         else:
             completion = await self._create_completion(input_ids, **kwargs)
         return completion
+
+class CallAPI:  # Call external API
+    def __init__(self, host, port, tokenizer, config, meta_info):
+        self.tokenizer = tokenizer
+        self.config = config
+        self.meta_info = meta_info
+        self.model = host
+        from openai import AsyncOpenAI
+        import os
+        self.client = AsyncOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL", None)  # Optional custom base URL
+        )
+
+    async def create_completion(self, input_ids, **kwargs):
+        max_len = kwargs.pop('max_len', None) or self.config.prompt_length + self.config.response_length
+        max_tokens = min(max_len, self.config.prompt_length + self.config.response_length) - len(input_ids)
+
+        if getattr(self.config.plugin, 'turn_max_new_tokens', -1) > 0:
+            max_tokens = min(max_tokens, self.config.plugin.turn_max_new_tokens)
+        if 'max_new_tokens' in kwargs:
+            max_tokens = min(max_tokens, kwargs.pop('max_new_tokens'))
+
+        if max_tokens < 10:
+            return None
+        messages = kwargs.get('messages') or decode_conversation(input_ids, self.tokenizer)[0]
+        print("API Call", len(messages))
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_completion_tokens=max_tokens,
+            )
+
+            text = response.choices[0].message.content or ""
+            text_ids = self.tokenizer.encode(text, add_special_tokens=False)
+
+            return {
+                "choices": [{
+                    "message": {
+                        "content": text,
+                        "raw_output_ids": text_ids,
+                        "response_log_probs": [0.0] * len(text_ids),
+                        "extra_data": {"input_ids": input_ids},
+                        "metrics": {"usage": {
+                            "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                            "completion_tokens": response.usage.completion_tokens if response.usage else len(text_ids),
+                            "total_tokens": response.usage.total_tokens if response.usage else 0,
+                        }}
+                    }
+                }]
+            }
+        except Exception as e:
+            print(f"[CallAPI ERROR] {e}")
+            return None
 
 
 def truncate_prompt(chat, prompt_length, tokenizer, prompt_turn):
@@ -455,3 +520,14 @@ class Agent(AgentContext):
 
     def set_cache(self, key, value):
         self.info_cache[key] = value
+
+
+@dataclass
+class TaskContext:
+    config: DictConfig
+    global_step: int
+    server_host: str
+    server_port: int
+    is_train: bool
+    tokenizer: Optional[PreTrainedTokenizer] = None
+

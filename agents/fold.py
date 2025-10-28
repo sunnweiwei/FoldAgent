@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from verl import DataProto
-from .utils import CallLLM, Agent, select_env, truncate_text, is_weird
+from .utils import CallLLM, Agent, select_env, truncate_text, is_weird, TaskContext, CallAPI
 from .prompts import create_chat
 from .prompts import BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE
 from .verifier import judge_scope
@@ -24,9 +24,6 @@ def print_chat(chat):
         else:
             chat_str += '# ' + turn['role'] + '\n\n' + turn['content'] + "\n\n---\n\n"
     return chat_str
-
-def is_ipv6(ip):
-    return ':' in ip
 
 def extract_fn_call(text):
     if text is None:
@@ -70,9 +67,11 @@ async def run_action(env, response):
     return observation
 
 
-async def process_single_batch(
+async def process_item(
         item: DataProto,
-        context: TaskContext) -> DataProto:
+        context: TaskContext,
+        LLMClass=CallLLM,
+) -> DataProto:
     os.environ["no_proxy"] = ""
     tokenizer = context.tokenizer
     config = context.config.actor_rollout_ref.rollout
@@ -117,12 +116,7 @@ async def process_single_batch(
     host = context.server_host
     port = context.server_port
 
-    if is_ipv6(host):
-        host = f'[{host}]'
-
-    url = f"http://{host}:{port}/chat/completions"
-
-    llm_client = CallLLM(url, tokenizer, config, meta_info=agent_config.get("meta_info", {}))
+    llm_client = LLMClass(host, port, tokenizer, config, meta_info=agent_config.get("meta_info", {}))
 
     prompt_turn = len(user_prompt)
     agent = dict()
@@ -144,6 +138,7 @@ async def process_single_batch(
         iteration += 1
 
         response = await agent['main'].step()
+        print(response)
 
         if response is None:
             break
@@ -206,7 +201,7 @@ async def process_single_batch(
 
         if process_reward:
             observation = truncate_text(observation, max_lines=100, merge_repeat=True, merge_num=4)
-
+        # print(observation)
         agent['main'].append({'role': 'user', 'content': observation})
         session_message.append({'role': 'user', 'content': observation})
 
@@ -362,7 +357,7 @@ async def process_single_batch(
         return
 
 
-@register_handler("agent/fold_agent")
-class ReActAgent(AsyncAgent):
-    async def __call__(self, item: DataProto, context: TaskContext, **kwargs):
-        return await process_single_batch(item, context)
+# @register_handler("agent/fold_agent")
+# class ReActAgent(AsyncAgent):
+#     async def __call__(self, item: DataProto, context: TaskContext, **kwargs):
+#         return await process_single_batch(item, context)
