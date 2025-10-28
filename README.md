@@ -21,7 +21,7 @@ cd envs && python search_server.py \
 
 ### Evaluate on BrowseComp
 
-- Download and decompress: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
+- Download and decompress data: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
 
 - **Fold Agent:** `workflow=search_branch`
 ```bash
