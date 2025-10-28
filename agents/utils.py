@@ -539,3 +539,22 @@ class TaskContext:
     is_train: bool
     tokenizer: Optional[PreTrainedTokenizer] = None
 
+
+async def run_action(env, response):
+    try:
+        try:
+            act = time.time()
+            env_return = await asyncio.wait_for(env.run_action(response), timeout=120.0)
+            if time.time() - act > 10:
+                print('Action Cost', time.time() - act)
+        except asyncio.TimeoutError:
+            print('[ACTION] Action timed out after 120 seconds')
+            env_return = {'observation': 'Action timed out after 120 seconds'}
+        if 'action' in env_return:
+            action, arguments = env_return['action'], env_return.get('arguments', {})
+            if action == 'finish':
+                return None
+        observation = env_return.pop('observation', 'Empty')
+    except Exception as e:
+        observation = f"Error: {e}"
+    return observation

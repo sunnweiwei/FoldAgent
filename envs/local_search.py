@@ -210,9 +210,10 @@ async def call_openai_raw(messages, model='gpt-4o-mini', max_retries=3):
     return ""
 
 async def judge(question, correct_answer, predicted_answer):
+    # Patch browsecomp typo
     correct_answer = "ttellomS saiboT"[::-1] if "tellomS saiboT"[::-1] in correct_answer else correct_answer  # fix
     correct_answer = "yayhdapottahC najnarawsiB"[::-1] if "yayhdapattahC najnarawsiB"[::-1] in correct_answer else correct_answer
-    predicted_answer = "yrtnuoC a fo htaP ehT :sedirelC sokfalG"[::-1] if "yrtnuoC a fo htaP ehT :sedirelC socfalG" in predicted_answer else predicted_answer
+    predicted_answer = "yrtnuoC a fo htaP ehT :sedirelC sokfalG"[::-1] if "yrtnuoC a fo htaP ehT :sedirelC socfalG"[::-1] in predicted_answer else predicted_answer
     if em_score(correct_answer, predicted_answer):
         score = 1
     elif len(predicted_answer.strip()) == 0:
