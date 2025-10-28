@@ -41,7 +41,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         tool_description = PARALLEL_TOOL_PROMPT.format(description=convert_tools_to_description(search_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT + '\n\n' + tool_description
         problem_statement = SEARCH_USER_PROMPT.format(Question=problem_statement)
-        user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_base':  # From https://github.com/texttron/BrowseComp-Plus/blob/main/search_agent/prompts.py
@@ -57,7 +58,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         problem_statement = ("The following are multiple questions you need to answer. You should find answers for all of them. After collecting the answers, submit them using the `finish` tool. In the `answer` field, include responses for every question, wrapped with <qn></qn> tags. For example: "
                                 "<parameter=answer> <q1>Answer to q1</q1> <q2>Answer to q2</q2> <q3>Answer to q3</q3> ... </parameter>.\n\n") + problem_statement
         problem_statement = SEARCH_USER_PROMPT.format(Question=problem_statement)
-        user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_branch':
@@ -65,7 +67,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
             description=convert_tools_to_description(search_tool() + branch_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT_BRANCH + '\n\n' + tool_description
         problem_statement = SEARCH_USER_PROMPT_BRANCH.format(Question=problem_statement)
-        user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_branch_multi':
@@ -75,7 +78,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         problem_statement = ("The following are multiple questions you need to answer. You should find answers for all of them. After collecting the answers, submit them using the `finish` tool. In the `answer` field, include responses for every question, wrapped with <qn></qn> tags. For example: "
                                 "<parameter=answer> <q1>Answer to q1</q1> <q2>Answer to q2</q2> <q3>Answer to q3</q3> ... </parameter>.\n\n") + problem_statement
         problem_statement = SEARCH_USER_PROMPT_BRANCH.format(Question=problem_statement)
-        user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_parallel':
