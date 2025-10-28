@@ -8,7 +8,8 @@ Paper: https://arxiv.org/pdf/2510.11967
 Coming soon
 
 ## Evaluation
-**Start Search Server:**
+
+### Start Search Server
 ```bash
 cd envs && python search_server.py \
   --model Qwen/Qwen3-Embedding-8B \
@@ -18,55 +19,67 @@ cd envs && python search_server.py \
   --port 8000
 ```
 
-**Using OpenAI API:**
+### Evaluate on BrowseComp
+- **Fold Agent:** `workflow=search_branch`
 ```bash
 export OPENAI_API_KEY='your-key'
 
 python scripts/eval_bc.py \
   --model_name gpt-5-nano \
-  --num_workers 4 \
+  --num_workers 150 \
+  --workflow search_branch \
   --prompt_length 16384 \
-  --response_length 128000 \
-  --workflow search \
-  --max_turn 500 \
-  --val_max_turn 500 \
+  --response_length 32768 \
+  --max_turn 200 \
+  --val_max_turn 200 \
   --max_session 10 \
   --val_max_session 10 \
   --local_search_url http://localhost:8000 \
   --output_dir results
 ```
+Output:
+```
+Evaluating: 100%|████████████████████████████████████████████████████████████████████████████████████| 150/150 [32:52<00:00, 13.15s/item, avg_score=0.407, id=122]
 
-**Using Open-Source Models (vLLM):**
+============================================================
+Overall - Avg Score: 0.4067, Success: 150/150
+
+By Data Source:
+  bc_test_easy: 0.8200 (50 items)
+  bc_test_hard: 0.0400 (50 items)
+  bc_test_meduim: 0.3600 (50 items)
+```
+
+- **ReAct Agent:**  `workflow=search`
+```bash
+python scripts/eval_bc.py --workflow search [...]
+```
+
+- **Summary Agent:** `workflow=search, enable_summary`
+```bash
+python scripts/eval_bc.py --workflow search --enable_summary [...]
+```
+
+### Using vLLM
 ```bash
 # Start vLLM server
-vllm serve Qwen/Qwen2.5-32B-Instruct --port 8001 --max-model-len 131072
+vllm serve ByteDance-Seed/Seed-OSS-36B-Instruct --port 8001 --max-model-len 131072
 
 # Run evaluation
 export OPENAI_API_KEY='dummy'
 export OPENAI_BASE_URL='http://localhost:8001/v1'
 
 python scripts/eval_bc.py \
-  --model_name Qwen/Qwen2.5-32B-Instruct \
-  --num_workers 10 \
+  --model_name ByteDance-Seed/Seed-OSS-36B-Instruct \
+  --workflow search_branch \
+  --num_workers 32 \
   --prompt_length 16384 \
-  --response_length 128000 \
-  --workflow search \
-  --max_turn 500 \
-  --val_max_turn 500 \
+  --response_length 32768 \
+  --max_turn 100 \
+  --val_max_turn 100 \
   --max_session 10 \
   --val_max_session 10 \
-  --local_search_url http://localhost:8000 \
   --output_dir results
-```
-
-**Output:**
-```
-Evaluating: 100%|████████| 100/100 [15:23<00:00, score=0.85]
-Overall - Avg Score: 0.7542, Success: 98/100
-By Data Source:
-  bc_test_easy: 0.89 (45 items)
-  bc_test_medium: 0.71 (25 items)
-  bc_test_hard: 0.62 (30 items)
 ```
 
 ### Evaluation on SWE-Bench Verified

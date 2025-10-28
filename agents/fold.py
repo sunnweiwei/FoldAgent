@@ -12,7 +12,7 @@ import torch
 from verl import DataProto
 from .utils import CallLLM, Agent, select_env, truncate_text, is_weird, TaskContext, CallAPI
 from .prompts import create_chat
-from .prompts import BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE
+from .prompts import BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE, SUMMARY_PROMPT_CODE, SUMMARY_PROMPT_SEARCH
 from .verifier import judge_scope
 
 
@@ -37,6 +37,9 @@ def extract_fn_call(text):
     params = dict(re.findall(r'<parameter=([^>]+)>(.*?)</parameter>', text_after_last_func, re.DOTALL))
     return {'function': last_function, 'arguments': params}
 
+def extract_summary(text: str) -> str:
+    matches = re.findall(r'<summary>(.*?)</summary>', text, re.DOTALL)
+    return matches[-1].strip() if matches else None
 
 def clean_response(response):
     if '<function=return>' in response:
@@ -98,10 +101,8 @@ async def process_item(
                                                                                        "search")
     user_prompt = create_chat(env.instance_info['problem_statement'], workflow, item)
 
-    if 'search' in workflow:
-        branch_prompt = BRANCH_MESSAGE_SEARCH
-    else:
-        branch_prompt = BRANCH_MESSAGE
+    branch_prompt = BRANCH_MESSAGE_SEARCH if 'search' in workflow else BRANCH_MESSAGE
+    summary_prompt = SUMMARY_PROMPT_SEARCH if 'search' in workflow else SUMMARY_PROMPT_CODE
 
     max_turn = agent_config.get("max_turn", 64)
     max_session = getattr(config.plugin, "max_session", 5)
@@ -112,6 +113,7 @@ async def process_item(
     if process_reward is not None and isinstance(process_reward, str) and process_reward.lower() == "none":
         process_reward = None
     max_traj = getattr(config.plugin, "max_traj", None)
+    enable_summary = getattr(config.plugin, "enable_summary", False)
 
     host = context.server_host
     port = context.server_port
@@ -137,6 +139,28 @@ async def process_item(
 
         iteration += 1
 
+        if enable_summary and len(agent[current].context()) - init_len > config.response_length * 0.95:  # summary
+            if len(agent) >= max_session:
+                print('[SESSION] Session OOC after session', len(agent))
+                break
+            agent[current].rollback(k=2)  # rollback last turn
+            agent[current].append({'role': 'assistant', 'content': "", })
+            agent[current].append({'role': 'user', 'content': summary_prompt})
+            session_message.append({'role': 'user', 'content': summary_prompt})
+            response = await agent[current].step()
+            session_message.append({'role': 'assistant', 'content': response})
+            if response is None:
+                break
+            summary = extract_summary(response) or response
+            next_session_prompt = (
+                f"For this question, you have already made the following progress in previous session, "
+                f"summarized as follow:\n\n{summary}\n\nNow continue work on it.")
+            current = current + '+'
+            agent[current] = Agent(llm_client, user_prompt, tokenizer, config, prompt_turn=prompt_turn)
+            agent[current].append({'role': 'assistant', 'content': ""})
+            agent[current].append({'role': 'user', 'content': next_session_prompt})
+            session_message.append({'role': 'user', 'content': next_session_prompt})
+
         response = await agent['main'].step()
         # print(response)
 
@@ -152,6 +176,7 @@ async def process_item(
                 description = fn_call['arguments'].get('description', 'Agent')
                 message_to_branch = fn_call['arguments'].get('prompt', 'Empty prompt')
                 print('[BRANCH]', description, len(agent['main'].context()))
+                # print(message_to_branch)
                 agent_name = f"#{len(branches)}-" + description.replace(' ', '_')
                 branches.append(agent_name)
                 branch_tasks[agent_name] = message_to_branch

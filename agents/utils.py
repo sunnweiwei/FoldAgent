@@ -233,35 +233,41 @@ class CallAPI:  # Call external API
         if max_tokens < 10:
             return None
         messages = kwargs.get('messages') or decode_conversation(input_ids, self.tokenizer)[0]
-        # print("API Call", len(messages))
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_completion_tokens=max_tokens,
-            )
 
-            text = response.choices[0].message.content or ""
-            text_ids = self.tokenizer.encode(text, add_special_tokens=False)
+        for attempt in range(5):
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_completion_tokens=max_tokens,
+                )
 
-            return {
-                "choices": [{
-                    "message": {
-                        "content": text,
-                        "raw_output_ids": text_ids,
-                        "response_log_probs": [0.0] * len(text_ids),
-                        "extra_data": {"input_ids": input_ids},
-                        "metrics": {"usage": {
-                            "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-                            "completion_tokens": response.usage.completion_tokens if response.usage else len(text_ids),
-                            "total_tokens": response.usage.total_tokens if response.usage else 0,
-                        }}
-                    }
-                }]
-            }
-        except Exception as e:
-            print(f"[CallAPI ERROR] {e}")
-            return None
+                text = response.choices[0].message.content or ""
+                text_ids = self.tokenizer.encode(text, add_special_tokens=False)
+
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": text,
+                            "raw_output_ids": text_ids,
+                            "response_log_probs": [0.0] * len(text_ids),
+                            "extra_data": {"input_ids": input_ids},
+                            "metrics": {"usage": {
+                                "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                                "completion_tokens": response.usage.completion_tokens if response.usage else len(text_ids),
+                                "total_tokens": response.usage.total_tokens if response.usage else 0,
+                            }}
+                        }
+                    }]
+                }
+            except Exception as e:
+                if attempt == 4:
+                    print(f"[CallAPI ERROR] Failed after 5 attempts: {e}")
+                    return None
+                wait_time = 2 ** attempt
+                print(f"[CallAPI] Attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+        return None
 
 
 def truncate_prompt(chat, prompt_length, tokenizer, prompt_turn):

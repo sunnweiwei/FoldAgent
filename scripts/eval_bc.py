@@ -5,11 +5,14 @@ import json
 import numpy as np
 import pandas as pd
 import sys
+import warnings
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+warnings.filterwarnings('ignore', message='.*fast tokenizer.*')
 
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
@@ -20,19 +23,33 @@ import os
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', default='data/bc_test.parquet')
-    parser.add_argument('--output_dir', default='results')
-    parser.add_argument('--prompt_length', type=int, default=16384)
-    parser.add_argument('--response_length', type=int, default=128000)
-    parser.add_argument('--workflow', default='search')
-    parser.add_argument('--max_turn', type=int, default=500)
-    parser.add_argument('--val_max_turn', type=int, default=500)
-    parser.add_argument('--max_session', type=int, default=10)
-    parser.add_argument('--val_max_session', type=int, default=10)
-    parser.add_argument('--model_name', default='gpt-5-nano')
-    parser.add_argument('--num_workers', type=int, default=150)
-    parser.add_argument('--local_search_url', default='http://localhost:8000')
+    parser = argparse.ArgumentParser(description='Evaluate agents on BrowseComp-Plus benchmark')
+    parser.add_argument('--data_path', default='data/bc_test.parquet',
+                        help='Path to test data parquet file (default: data/bc_test.parquet)')
+    parser.add_argument('--output_dir', default='results',
+                        help='Directory to save evaluation results (default: results)')
+    parser.add_argument('--prompt_length', type=int, default=16384,
+                        help='Maximum prompt length in tokens (default: 16384)')
+    parser.add_argument('--response_length', type=int, default=32768,
+                        help='Maximum response length in tokens (default: 32768)')
+    parser.add_argument('--workflow', default='search_branch',
+                        help='Agent workflow: "search" for ReAct, "search_branch" for Context-Folding (default: search_branch)')
+    parser.add_argument('--max_turn', type=int, default=200,
+                        help='Maximum turns during training (default: 200)')
+    parser.add_argument('--val_max_turn', type=int, default=200,
+                        help='Maximum turns during validation/evaluation (default: 200)')
+    parser.add_argument('--max_session', type=int, default=10,
+                        help='Maximum branch sessions for Context-Folding during training (default: 10)')
+    parser.add_argument('--val_max_session', type=int, default=10,
+                        help='Maximum branch sessions for Context-Folding during validation (default: 10)')
+    parser.add_argument('--model_name', default='gpt-5-nano',
+                        help='Model name for API (e.g., gpt-5-nano, gpt-4o, or vLLM model path) (default: gpt-5-nano)')
+    parser.add_argument('--num_workers', type=int, default=150,
+                        help='Number of parallel evaluation workers (default: 150)')
+    parser.add_argument('--local_search_url', default='http://localhost:8000',
+                        help='URL of the local search server (default: http://localhost:8000)')
+    parser.add_argument('--enable_summary', action='store_true',
+                        help='Enable summary mode (use with workflow=search for Summary agent)')
     return parser.parse_args()
 
 
@@ -60,7 +77,7 @@ async def eval_one(row, config, tokenizer, model_name):
     return result
 
 
-async def worker(worker_id, rows, args, pbar):
+async def worker(worker_id, rows, args, pbar, shared_scores):
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct", trust_remote_code=True)
 
     config = OmegaConf.create({
@@ -79,6 +96,7 @@ async def worker(worker_id, rows, args, pbar):
                 'must_finish': False,
                 'double_check': False,
                 'must_search': False,
+                'enable_summary': args.enable_summary
             }
         }}
     })
@@ -87,7 +105,9 @@ async def worker(worker_id, rows, args, pbar):
     for row in rows:
         result = await eval_one(row, config, tokenizer, args.model_name)
         results.append(result)
-        pbar.set_postfix({'score': f"{result['score']:.2f}", 'id': result['instance_id']})
+        shared_scores.append(result['score'])
+        avg_score = np.mean(shared_scores)
+        pbar.set_postfix({'avg_score': f"{avg_score:.3f}", 'id': result['instance_id']})
         pbar.update(1)
 
     return results
@@ -108,8 +128,9 @@ def main():
 
     # Run workers with progress bar
     async def run_all():
+        shared_scores = []
         with tqdm(total=len(df), desc="Evaluating", unit="item") as pbar:
-            tasks = [worker(i, [chunks[i].iloc[j] for j in range(len(chunks[i]))], args, pbar)
+            tasks = [worker(i, [chunks[i].iloc[j] for j in range(len(chunks[i]))], args, pbar, shared_scores)
                      for i in range(args.num_workers)]
             return await asyncio.gather(*tasks)
 

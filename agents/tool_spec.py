@@ -247,7 +247,7 @@ def branch_tool():
                 'type': 'object',
                 'properties': {
                     'description': {
-                        'description': 'A concise 3-5 word identifier for the sub-task.',
+                        'description': 'A concise 3-5 word identifier for the sub-task  (e.g., "Narrow down last 7 overs stats", "Code Exploration", "Test Creation").',
                         'type': 'string'
                     },
                     'prompt': {
