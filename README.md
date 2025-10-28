@@ -21,7 +21,7 @@ cd envs && python search_server.py \
 
 ### Evaluate on BrowseComp
 
-- Download and decompress: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
+- Download and decompress data: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
 
 - **Fold Agent:** `workflow=search_branch`
 ```bash
@@ -64,7 +64,7 @@ python scripts/eval_bc.py --workflow search [...]
 python scripts/eval_bc.py --workflow search --enable_summary [...]
 ```
 
-### Using vLLM
+### Using Local LLMs (eg vLLM)
 ```bash
 # Start vLLM server
 vllm serve ByteDance-Seed/Seed-OSS-36B-Instruct --port 8001 --max-model-len 131072
@@ -79,8 +79,8 @@ python scripts/eval_bc.py \
   --num_workers 32 \
   --prompt_length 16384 \
   --response_length 32768 \
-  --max_turn 100 \
-  --val_max_turn 100 \
+  --max_turn 200 \
+  --val_max_turn 200 \
   --max_session 10 \
   --val_max_session 10 \
   --output_dir results

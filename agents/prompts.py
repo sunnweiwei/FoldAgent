@@ -18,8 +18,7 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         user_prompt = OPENHANDS_EXAMPLE + '\n\n' + problem_statement + '\n\n' + CODE_USER_PROMPT
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
-
-    if workflow == 'code_branch':
+    elif workflow == 'code_branch':
         tool_description = TOOL_PROMPT.format(description=convert_tools_to_description(codeact_tool() + branch_tool()))
         system_prompt = CODE_SYSTEM_PROMPT_BRANCH + '\n\n' + tool_description
 
@@ -42,7 +41,15 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         tool_description = PARALLEL_TOOL_PROMPT.format(description=convert_tools_to_description(search_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT + '\n\n' + tool_description
         problem_statement = SEARCH_USER_PROMPT.format(Question=problem_statement)
-        user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
+        chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
+        return chat
+    elif workflow == 'search_base':  # From https://github.com/texttron/BrowseComp-Plus/blob/main/search_agent/prompts.py
+        tool_description = PARALLEL_TOOL_PROMPT.format(description=convert_tools_to_description(search_tool()))
+        system_prompt = 'You are an expert research agent focused on comprehensive research strategy, execution, and final report writing. Your core goal is to be maximally helpful to the user by researching their query thoroughly and creating an excellent research report that answers the query very well.'  + '\n\n' + tool_description
+        problem_statement = SEARCH_USER_PROMPT_BASE.format(Question=problem_statement)
+        user_prompt = problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_multi':
@@ -51,7 +58,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         problem_statement = ("The following are multiple questions you need to answer. You should find answers for all of them. After collecting the answers, submit them using the `finish` tool. In the `answer` field, include responses for every question, wrapped with <qn></qn> tags. For example: "
                                 "<parameter=answer> <q1>Answer to q1</q1> <q2>Answer to q2</q2> <q3>Answer to q3</q3> ... </parameter>.\n\n") + problem_statement
         problem_statement = SEARCH_USER_PROMPT.format(Question=problem_statement)
-        user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_branch':
@@ -59,7 +67,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
             description=convert_tools_to_description(search_tool() + branch_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT_BRANCH + '\n\n' + tool_description
         problem_statement = SEARCH_USER_PROMPT_BRANCH.format(Question=problem_statement)
-        user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_branch_multi':
@@ -69,7 +78,8 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         problem_statement = ("The following are multiple questions you need to answer. You should find answers for all of them. After collecting the answers, submit them using the `finish` tool. In the `answer` field, include responses for every question, wrapped with <qn></qn> tags. For example: "
                                 "<parameter=answer> <q1>Answer to q1</q1> <q2>Answer to q2</q2> <q3>Answer to q3</q3> ... </parameter>.\n\n") + problem_statement
         problem_statement = SEARCH_USER_PROMPT_BRANCH.format(Question=problem_statement)
-        user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
+        user_prompt = problem_statement
+        # user_prompt = SEARCH_BRANCH_EXAMPLE + '\n\n' + problem_statement
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_parallel':
@@ -332,6 +342,20 @@ Use the finish tool to submit your answer. The answer field should be your best-
 Now you are MAIN. Now in MODE: MAIN. Use branch tool. `MODE: MAIN`.
 Read the `MODE: MAIN` section in the system prompt, and perform the four-step workflow: Deconstruct & Plan, Branch Tasks, Synthesize & Analyze, Verify & Retry, Report.
 '''
+
+
+SEARCH_USER_PROMPT_BASE = """
+You are a deep research agent. You need to answer the given question by interacting with a search engine, using the search and open tools provided. Please perform reasoning and use the tools step by step, in an interleaved manner. You may use the search and open tools multiple times.
+
+Question: {Question}
+
+Your response should contain:
+Explanation: {{your explanation for your final answer. For this explanation section only, you should cite your evidence documents inline by enclosing their docids in square brackets [] at the end of sentences. For example, [20].}}
+Exact Answer: {{your succinct, final answer}}
+Confidence: {{your confidence score between 0% and 100% for your answer}}
+
+Use finish tool to submit your answer.
+""".strip()
 
 CODE_SYSTEM_PROMPT = '''You are OpenHands agent, a helpful AI assistant that can interact with a computer to solve tasks.
 

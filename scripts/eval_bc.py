@@ -16,7 +16,7 @@ warnings.filterwarnings('ignore', message='.*fast tokenizer.*')
 
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
-from agents.fold import process_item
+from agents.fold_agent import process_item
 from agents.utils import CallAPI, TaskContext
 from verl import DataProto
 import os

@@ -286,6 +286,7 @@ def truncate_prompt(chat, prompt_length, tokenizer, prompt_turn):
 
 
 class AgentContext:
+    # Manage context of an agent
     def __init__(self, chat, tokenizer, config, prompt_turn=2):
         self.tokenizer = tokenizer
         self.config = config
@@ -428,6 +429,7 @@ class AgentContext:
 
 
 class Agent(AgentContext):
+    # Agent utils
     def __init__(self, llm_client, conversations, tokenizer, config, prompt_turn=2):
         super().__init__(conversations, tokenizer, config, prompt_turn=prompt_turn)
         self.llm_client = llm_client
