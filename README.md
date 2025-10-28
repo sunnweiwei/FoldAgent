@@ -20,11 +20,15 @@ cd envs && python search_server.py \
 ```
 
 ### Evaluate on BrowseComp
+
+- Download and decompress: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
+
 - **Fold Agent:** `workflow=search_branch`
 ```bash
 export OPENAI_API_KEY='your-key'
 
 python scripts/eval_bc.py \
+  --data_path data/bc_test.parquet \
   --model_name gpt-5-nano \
   --num_workers 150 \
   --workflow search_branch \
@@ -39,7 +43,7 @@ python scripts/eval_bc.py \
 ```
 Output:
 ```
-Evaluating: 100%|████████████████████████████████████████████████████████████████████████████████████| 150/150 [32:52<00:00, 13.15s/item, avg_score=0.407, id=122]
+Evaluating: 100%|█████████████| 150/150 [32:52<00:00, 13.15s/item, avg_score=0.407, id=122]
 
 ============================================================
 Overall - Avg Score: 0.4067, Success: 150/150
