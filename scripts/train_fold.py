@@ -1,6 +1,5 @@
 import logging
 import os
-from dataclasses import dataclass
 from typing import Any, Union
 
 from verl.experimental.agent_loop.agent_loop import (
@@ -9,7 +8,8 @@ from verl.experimental.agent_loop.agent_loop import (
     register,
 )
 from verl import DataProto
-from agents.fold_agent import process_item, CallLLM, TaskContext
+from agents.fold_agent import process_item
+from agents.utils import CallLLM, TaskContext
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -47,8 +47,7 @@ class FoldAgentLoop(AgentLoopBase):
             is_train=kwargs.get('is_train', True),
             tokenizer=self.tokenizer,
         )
-        rollout_results = await process_item(item, context,
-        )
+        rollout_results = await process_item(item, context)
 
         return rollout_results
 
