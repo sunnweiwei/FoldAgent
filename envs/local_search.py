@@ -387,38 +387,8 @@ class LocalSearch:
         self.question = item.non_tensor_batch['extra_info'][0]['query']
         self.label_answer = item.non_tensor_batch['extra_info'][0]['answer']
         self.predicted_answer = None
-
-    async def get_data(self, item, context):
-        if 'prompt' in item.non_tensor_batch['extra_info'][0]:
-            prompt = item.non_tensor_batch['extra_info'][0]['prompt']
-            conversations = [
-                {'role': 'system', 'content': prompt[0]['content']},
-                {'role': 'user', 'content': prompt[-1]['content']},
-            ]
-
-        else:
-            conversations = [
-                {'role': 'system', 'content': ''},
-                {'role': 'user', 'content': ''},
-            ]
-
         self.instance_info = copy.deepcopy(item.non_tensor_batch['extra_info'][0])
         self.instance_info['problem_statement'] = self.instance_info['query']
-        meta_info = copy.copy(item.meta_info)
-        meta_info['uid'] = item.non_tensor_batch['uid'][0]
-        meta_info['reward_model'] = item.non_tensor_batch['reward_model'][0]
-
-        if "max_turn" in item.meta_info:
-            max_turn = item.meta_info["max_turn"]
-        else:
-            if context.is_train:
-                max_turn = self.config.plugin.max_turn
-            else:
-                if "val_max_turn" in self.config.plugin:
-                    max_turn = self.config.plugin.val_max_turn
-                else:
-                    max_turn = self.config.plugin.max_turn
-        return conversations, {'max_turn': max_turn, 'meta_info': meta_info}
 
     async def run_action(self, response):
         self.stats['action'] += 1

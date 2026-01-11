@@ -54,8 +54,8 @@ def parse_args():
 
 
 async def eval_one(row, config, tokenizer, model_name):
-    context = TaskContext(config=config, global_step=0, server_host=model_name,
-                          server_port=0, is_train=False, tokenizer=tokenizer)
+    llm_client = CallAPI(url=model_name, tokenizer=tokenizer, config=config)
+    context = TaskContext(config=config, global_step=0, llm_client=llm_client, is_train=False, tokenizer=tokenizer)
 
     item = DataProto()
     item.non_tensor_batch = {
@@ -66,12 +66,12 @@ async def eval_one(row, config, tokenizer, model_name):
     }
     item.meta_info = {'generation_kwargs': {}, 'max_turn': config.actor_rollout_ref.rollout.plugin.val_max_turn}
 
-    output = await process_item(item, context, CallAPI)
+    output = await process_item(item, context)
 
     result = {
         'instance_id': row['extra_info'].get('instance_id', 'unknown'),
         'data_source': row.get('data_source', 'unknown'),
-        'score': output.non_tensor_batch.get('extra_data', [{}])[0].get('stats', {}).get('score', 0) if output else 0,
+        'score': output[0].get('reward_score', 0) if output else 0,
         'status': 'success' if output else 'failed'
     }
     return result

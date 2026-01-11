@@ -8,11 +8,12 @@ import re, unicodedata
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 from omegaconf import DictConfig
-from transformers import PreTrainedTokenizer
+from transformers import PreTrainedTokenizer, AutoTokenizer
 import aiohttp
 import torch
+from pydantic import BaseModel
+from typing import Any, Optional
 import asyncio, httpx
-from verl import DataProto
 from envs.local_search import LocalSearch
 
 
@@ -119,101 +120,78 @@ def is_weird(text, repeat_n=128, cjk_limit=128):
     cjk_count = sum(any(a <= ord(c) <= b for a, b in CJK) for c in s)
     return cjk_count >= cjk_limit or (len(s) > 0 and cjk_count / len(s) > 0.8)
 
+class LLMClass:
+    async def create_completion(self, input_ids, **kwargs):
+        raise NotImplemented
 
-class CallLLM:  # Call policy LLM in RL env
-    def __init__(self, host, port, tokenizer, config, meta_info):
-        if ':' in host:
-            host = f'[{host}]'
-        url = f"http://{host}:{port}/chat/completions"
-
-        self.url = url
+class CallLLM(LLMClass):  # Call LLM in Verl RL env
+    def __init__(self, url, tokenizer, config, loop, **kwargs):
+        self.server_manager = url
         self.tokenizer = tokenizer
         self.config = config
-        self.meta_info = meta_info
+        self.loop = loop
         self.call_openai = getattr(config.plugin, "call_openai", None)
 
     async def _create_completion(self, input_ids, **kwargs):
-        generation_kwargs = self.meta_info['generation_kwargs']
+        from uuid import uuid4
+
         max_len = kwargs.pop('max_len', None) or self.config.prompt_length + self.config.response_length
         max_len = min(max_len, self.config.prompt_length + self.config.response_length)
-        max_tokens = max_len - len(input_ids)
+        max_new_tokens = max_len - len(input_ids)
         # This is used to avoid repetitive generation.
-        if getattr(self.config.plugin, 'turn_max_new_tokens', -1) > 0:
-            max_tokens = min(max_tokens, self.config.plugin.turn_max_new_tokens)
+        if hasattr(self.config, 'plugin') and getattr(self.config.plugin, 'turn_max_new_tokens', -1) > 0:
+            max_tokens = min(max_new_tokens, self.config.plugin.turn_max_new_tokens)
         if 'max_new_tokens' in kwargs:
-            max_tokens = min(max_tokens, kwargs['max_new_tokens'])
+            max_new_tokens = min(max_new_tokens, kwargs['max_new_tokens'])
 
-        if max_tokens < 10:
-            print(f"[DEBUG] max_tokens {max_tokens}, skip rollout")
+        if max_new_tokens < 10:
+            print(f"[DEBUG] max_new_tokens {max_new_tokens}, skip rollout")
             return None
 
-        uid = kwargs.pop('uid', self.meta_info.get('uid', None))
+        uid = kwargs.pop('uid', None) or uuid4().hex
 
-        request_data = {
-            "model": "rollout",
-            "messages": {'prompt': input_ids},
-            "top_p": generation_kwargs['top_p'],
-            "top_k": generation_kwargs['top_k'],
-            "temperature": generation_kwargs['temperature'],
-            "max_tokens": max_tokens,
-            "max_length": max_len,
-            "meta_info": self.meta_info | {'uid': uid},
+        sampling_params = kwargs.pop('sampling_params', None) or {}
+        sampling_params = {
+            'temperature': sampling_params.get('temperature', 1.0),
+            'top_p': sampling_params.get('top_p', 1.0),
+            'max_tokens': max_new_tokens,
         }
 
-        import asyncio
+        output = await self.server_manager.generate(
+            request_id=uid,
+            prompt_ids=input_ids,
+            sampling_params=sampling_params,
+            image_data=None,
+        )
 
-        for attempt in range(10):
-            try:
-                timeout = aiohttp.ClientTimeout(total=9600)
-                session = aiohttp.ClientSession(timeout=timeout)
-                async with session.post(url=self.url,
-                                        headers={"Authorization": "Bearer token-abc123"},
-                                        json=request_data,
-                                        timeout=timeout) as response:
-                    completion = await response.json()
-                    completion['choices'][0]['message']['extra_data']['input_ids'] = input_ids
-                    assert response.status == 200, f"chat_completions failed msg: {completion}"
-                    await session.close()
-                    return completion
+        if output is None or len(output.token_ids) == 0:
+            return None
 
-            except Exception as e:
-                print(f"[CallLLM ERROR] {e}")
-                await session.close()
-                await asyncio.sleep(2 ** attempt)
-                if attempt < 2:
-                    pass
-                else:
-                    import traceback
-                    traceback.print_exc()
-        return completion
+        response_text = await self.loop.run_in_executor( None, lambda: self.tokenizer.decode(output.token_ids, skip_special_tokens=True))
+
+        return {
+            "choices": [{
+                "message": {
+                    "content": response_text,
+                    "raw_output_ids": output.token_ids,
+                    "response_log_probs": output.log_probs if hasattr(output, 'log_probs') else [0.0] * len(
+                        output.token_ids),
+                    "extra_data": {"input_ids": input_ids},
+                    "metrics": {}
+                }
+            }]
+        }
 
     async def create_completion(self, input_ids, **kwargs):
-        if self.call_openai:
-            # Evaluate API models
-            messages = kwargs.get('messages', None) or decode_conversation(input_ids, self.tokenizer)[0]
-            kwargs['max_new_tokens'] = 100
-            completion, text = await asyncio.gather(
-                self._create_completion(input_ids, **kwargs),
-                call_openai(model=self.call_openai, messages=messages)
-            )
-            if completion is not None:
-                if text is None:
-                    return None
-                text_ids = self.tokenizer.encode(text)
-                # print('[OPENAI]', len(text_ids))
-                completion["choices"][0]["message"]["content"] = text
-                completion["choices"][0]["message"]["raw_output_ids"] = text_ids
-                completion["choices"][0]["message"]["response_log_probs"] = [0.0] * len(text_ids)
-        else:
-            completion = await self._create_completion(input_ids, **kwargs)
+        completion = await self._create_completion(input_ids, **kwargs)
         return completion
 
-class CallAPI:  # Call external API
-    def __init__(self, host, port, tokenizer, config, meta_info):
+
+class CallAPI(LLMClass):  # Call external API (OpenAI)
+    def __init__(self, url, tokenizer, config, **kwargs):
         self.tokenizer = tokenizer
         self.config = config
-        self.meta_info = meta_info
-        self.model = host
+        self.model = url
         from openai import AsyncOpenAI
         import os
         self.client = AsyncOpenAI(
@@ -292,8 +270,17 @@ class AgentContext:
         self.config = config
         self.init_len = len(chat)
         self.prompt_turn = prompt_turn
-        self.prompt_length = config.prompt_length
-        self.response_length = config.response_length
+
+        # Support both inference and training config styles
+        if hasattr(config, 'actor_rollout_ref'):
+            # Training config (VERL)
+            self.prompt_length = config.actor_rollout_ref.rollout.prompt_length
+            self.response_length = config.actor_rollout_ref.rollout.response_length
+        else:
+            # Inference config
+            self.prompt_length = config.prompt_length
+            self.response_length = config.response_length
+
         self.context_uid = str(uuid.uuid4())
 
         self.chat = copy.deepcopy(chat)
@@ -351,7 +338,6 @@ class AgentContext:
                 self.chat_ids[-1].append(self.tokenizer.eos_token_id)
                 self.log_probs[-1].append(0.0)
                 self.token_mask[-1].append(False)
-            self.metrics = completion["choices"][0]["message"]['metrics']
 
     def rollback(self, k=1):
         self.chat = self.chat[:-k]
@@ -366,66 +352,30 @@ class AgentContext:
             return {}
         return self.metrics
 
-    async def dataproto(self):
-        # Create and mask prompt
+    async def get_data(self):
         prompt_turn = self.prompt_turn
         prompt_length = self.prompt_length
         response_length = self.response_length
 
         prompt_ids = sum(self.chat_ids[:prompt_turn], [])
         if len(prompt_ids) > prompt_length:
-            print('[PROMPT] prompt truncated in dataproto')
-        with patch.object(self.tokenizer, "padding_side", "left"):
-            prompt_output = self.tokenizer.pad(dict(input_ids=[prompt_ids[-prompt_length:]]),
-                                               padding="max_length",
-                                               max_length=prompt_length,
-                                               return_tensors="pt")
-            prompt_tensor = prompt_output["input_ids"][:, -prompt_length:].to(torch.int32)
-            prompt_mask = prompt_output["attention_mask"][:, -prompt_length:].to(torch.int8)
+            print('[PROMPT] prompt truncated')
+            prompt_ids = prompt_ids[-prompt_length:]
 
-        # Create and mask response
-        response_outputs = sum(self.chat_ids[prompt_turn:], [])
-        response_log_probs = sum(self.log_probs[prompt_turn:], [])
-        model_output_mask = sum(self.token_mask[prompt_turn:], [])
-        off_policy_steps = [-1] * len(response_log_probs)
+        response_ids = sum(self.chat_ids[prompt_turn:], [])[:response_length]
+        response_logprobs = sum(self.log_probs[prompt_turn:], [])[:response_length]
+        response_mask = [1 if m else 0 for turn in self.token_mask[self.prompt_turn:] for m in turn][:response_length]
         process_reward_mask = sum([[info.get('process_reward', 0) if isinstance(info, dict) else 0] * len(turn)
                                    for turn, info in zip(self.chat_ids, self.additional_info)][prompt_turn:], [])
-
-        def _pad(cur_list, target_length, pad_token=-1):
-            if len(cur_list) > target_length:
-                padded_list = cur_list[:target_length]
-            else:
-                padded_list = cur_list + [pad_token] * (target_length - len(cur_list))
-            return padded_list
-
-        with patch.object(self.tokenizer, "padding_side", "right"):
-            response_output = self.tokenizer.pad(dict(input_ids=[response_outputs[:response_length]]),
-                                                 padding="max_length",
-                                                 max_length=response_length,
-                                                 return_tensors="pt")
-            response_tensor = response_output["input_ids"][:, :response_length].to(torch.int32)
-            response_mask = response_output["attention_mask"][:, :response_length].to(torch.int8)
-
-        input_ids = torch.hstack((prompt_tensor, response_tensor))
-        attention_mask = torch.hstack((prompt_mask, response_mask))
-        response_log_probs = torch.Tensor([_pad(response_log_probs, response_length, pad_token=0)])
-        off_policy_steps = torch.Tensor([_pad(off_policy_steps, response_length, pad_token=-1)])
-        model_output_mask = torch.Tensor([_pad(model_output_mask, response_length, pad_token=False)])
-        process_reward_mask = torch.Tensor([_pad(process_reward_mask, response_length, pad_token=0)])
-        process_reward_mask = process_reward_mask * model_output_mask.int()
-
-        batch = {
-            'input_ids': input_ids.to(torch.int32),  # here input_ids become the whole sentences
-            'attention_mask': attention_mask.to(torch.int8),
-            'rollout_behavior_log_probs': response_log_probs.to(torch.bfloat16),
-            'off_policy_steps': off_policy_steps.to(torch.int8),
-            'model_output_mask': model_output_mask.to(torch.int8),
-            'is_finished': torch.Tensor([True]).to(torch.int8),
-            'process_reward_mask': process_reward_mask.to(torch.int8)
+        process_reward_mask = [p * m for p, m in zip(process_reward_mask, response_mask)][:response_length]
+        return {
+            'response_ids': response_ids,
+            'response_logprobs': response_logprobs,
+            'response_mask': response_mask,
+            'process_reward_mask': process_reward_mask,
+            'num_turns': len(self.chat_ids),
+            'messages': self.chat,
         }
-
-        out = DataProto.from_dict(batch)
-        return out
 
 
 class Agent(AgentContext):
@@ -445,15 +395,6 @@ class Agent(AgentContext):
             prompt, uid=self.context_uid, max_len=max_len, messages=self.chat)
         if completion is None:
             return None
-        if max(self.retry_cjk, retry_cjk):
-            if is_weird(completion["choices"][0]["message"]["content"]):
-                for _ in range(int(max(self.retry_cjk, retry_cjk))):
-                    completion = await self.llm_client.create_completion(
-                        prompt, uid=self.context_uid, max_len=max_len, messages=self.chat)
-                    if is_weird(completion["choices"][0]["message"]["content"]):
-                        continue
-                    else:
-                        break
         response = completion["choices"][0]["message"]["content"]
         self.append({'role': 'assistant', 'content': response}, completion)
         return response
@@ -534,10 +475,39 @@ class Agent(AgentContext):
 class TaskContext:
     config: DictConfig
     global_step: int
-    server_host: str
-    server_port: int
     is_train: bool
-    tokenizer: Optional[PreTrainedTokenizer] = None
+    tokenizer: Optional[PreTrainedTokenizer, AutoTokenizer] = None
+    llm_client: LLMClass = None
+
+class AgentLoopMetrics(BaseModel):
+    """Agent loop performance metrics."""
+
+    generate_sequences: float = 0.0
+    tool_calls: float = 0.0
+
+class AgentLoopOutput(BaseModel):
+    """Agent loop output."""
+
+    prompt_ids: list[int]
+    """Prompt token ids."""
+    response_ids: list[int]
+    """Response token ids including LLM generated token, tool response token."""
+    response_mask: list[int]
+    """Response mask, 1 for LLM generated token, 0 for tool response token."""
+    response_logprobs: Optional[list[float]] = None
+    """Log probabilities for the response tokens."""
+    routed_experts: Optional[Any] = None
+    """Routed experts for the total tokens."""
+    multi_modal_data: Optional[dict[str, Any]] = None
+    """Multi-modal data for multi-modal tools."""
+    reward_score: Optional[float] = None
+    """Reward score for the trajectory."""
+    num_turns: int = 0
+    """Number of chat turns, including user, assistant, tool."""
+    metrics: AgentLoopMetrics
+    """Auxiliary performance metrics"""
+    extra_fields: dict[str, Any] = {}
+    """Extra fields for dynamic addition."""
 
 
 async def run_action(env, response):
