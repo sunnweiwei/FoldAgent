@@ -371,7 +371,7 @@ class AgentContext:
                                    for turn, info in zip(self.chat_ids, self.additional_info)][prompt_turn:], [])
         process_reward_mask = [p * m for p, m in zip(process_reward_mask, response_mask)][:response_length]
         return {
-            'promt_ids': prompt_ids,
+            'prompt_ids': prompt_ids,
             'response_ids': response_ids,
             'response_logprobs': response_logprobs,
             'response_mask': response_mask,
