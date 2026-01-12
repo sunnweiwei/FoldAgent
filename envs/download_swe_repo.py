@@ -10,12 +10,6 @@ from tqdm import tqdm
 from filelock import FileLock
 from multiprocessing import Pool, cpu_count
 
-# --------------------------------------------------------------------------- #
-# Networking / proxy
-# os.environ["http_proxy"] = "http://sys-proxy-rd-relay.byted.org:8118"
-# os.environ["https_proxy"] = "http://sys-proxy-rd-relay.byted.org:8118"
-# os.environ["no_proxy"] = "code.byted.org"
-# --------------------------------------------------------------------------- #
 
 DATA_DIR = Path("gym_data")  # snapshots per instance
 CACHE_DIR = Path("_repo_cache")  # bare/partial repos (shared among workers)

@@ -210,7 +210,9 @@ class CallAPI(LLMClass):  # Call external API (OpenAI)
 
         if max_tokens < 10:
             return None
-        messages = kwargs.get('messages') or decode_conversation(input_ids, self.tokenizer)[0]
+        messages = kwargs.get('messages', None)
+        if messages is None:
+            messages = decode_conversation(input_ids, self.tokenizer)[0]
 
         for attempt in range(5):
             try:
@@ -283,7 +285,7 @@ class AgentContext:
 
         self.context_uid = str(uuid.uuid4())
 
-        self.chat = copy.deepcopy(chat)
+        self.chat = copy.deepcopy([turn for turn in chat])
         self.chat = truncate_prompt(self.chat, config.prompt_length, tokenizer, prompt_turn)
         self.chat_completions = [None for _ in range(len(self.chat))]
         self.chat_ids = [self.get_turn_context(i) for i in range(len(self.chat))]
@@ -369,6 +371,7 @@ class AgentContext:
                                    for turn, info in zip(self.chat_ids, self.additional_info)][prompt_turn:], [])
         process_reward_mask = [p * m for p, m in zip(process_reward_mask, response_mask)][:response_length]
         return {
+            'promt_ids': prompt_ids,
             'response_ids': response_ids,
             'response_logprobs': response_logprobs,
             'response_mask': response_mask,
@@ -476,7 +479,7 @@ class TaskContext:
     config: DictConfig
     global_step: int
     is_train: bool
-    tokenizer: Optional[PreTrainedTokenizer, AutoTokenizer] = None
+    tokenizer: PreTrainedTokenizer | AutoTokenizer | None = None
     llm_client: LLMClass = None
 
 class AgentLoopMetrics(BaseModel):
