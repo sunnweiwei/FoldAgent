@@ -9,7 +9,7 @@ TRAIN_DATA_PATH=data/bc_train.parquet
 TEST_DATA_PATH=data/bc_test.parquet
 
 
-python -m scripts.fold_agent_loop \
+python -m scripts.train_fold \
   algorithm.adv_estimator=foldgrpo \
   actor_rollout_ref.rollout.agent.default_agent_loop=fold_agent \
   actor_rollout_ref.rollout.name=vllm \
