@@ -1,24 +1,15 @@
 import os
-import re
-import time
-import copy
 import asyncio
-from functools import partial
-import random
-
-import numpy as np
-import torch
 
 from verl import DataProto
-from .utils import CallLLM, Agent, select_env, truncate_text, is_weird, TaskContext, run_action
+from .utils import Agent, select_env, TaskContext, run_action, AgentLoopOutput, AgentLoopMetrics
 from .prompts import create_chat
 
 
 async def process_item(
         item: DataProto,
         context: TaskContext,
-        LLMClass=CallLLM,
-) -> DataProto:
+) -> AgentLoopOutput:
     os.environ["no_proxy"] = ""
     tokenizer = context.tokenizer
     config = context.config.actor_rollout_ref.rollout
@@ -38,14 +29,12 @@ async def process_item(
     except Exception as e:
         print(f"[Error] during environment init: {str(e)}")
 
-    user_prompt, agent_config = await env.get_data(item, context)
     workflow = item.non_tensor_batch['extra_info'][0].get('workflow', None) or getattr(config.plugin, "workflow",
                                                                                        "search")
     user_prompt = create_chat(env.instance_info['problem_statement'], workflow, item)
-    max_turn = agent_config.get("max_turn", 64)
-    host = context.server_host
-    port = context.server_port
-    llm_client = LLMClass(host, port, tokenizer, config, meta_info=agent_config.get("meta_info", {}))
+    max_turn = getattr(config.plugin, 'max_turn', 64) if config.plugin else 64
+
+    llm_client = context.llm_client
     prompt_turn = len(user_prompt)
 
     agent = Agent(llm_client, user_prompt, tokenizer, config, prompt_turn=prompt_turn)
@@ -70,12 +59,19 @@ async def process_item(
         print(f"[Error] Getting reward: {e}")
         score, reward_dict = ("", 0), {"ans_reward": 0.0, "format_reward": 0.0, "ref_reward": 0.0}
 
-    out = await agent.dataproto()
-    messages = agent.messages()
-    out = await env.update_dataproto(out, item, messages, score, reward_dict,
-                                         tag='main', metrics=agent.get_metrics())
-    res = DataProto.concat([out])
-    return res
+    out = await agent.get_data()
+    agent_reward = score[1]
+    out = AgentLoopOutput(
+        prompt_ids=out['prompt_ids'],
+        response_ids=out['response_ids'],
+        response_mask=out['response_mask'],
+        response_logprobs=out['response_logprobs'],
+        multi_modal_data={},
+        metrics=AgentLoopMetrics(),
+        reward_score=agent_reward,
+        num_turns=out['num_turns'],
+    )
+    return out
 
 
 # @register_handler("agent/react_agent")

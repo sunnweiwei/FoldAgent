@@ -5,14 +5,12 @@ import copy
 import asyncio
 from functools import partial
 import random
-
-import numpy as np
-import torch
+from uuid import uuid4
+from typing import Any, Union
 
 from verl import DataProto
-from .utils import CallLLM, Agent, select_env, truncate_text, is_weird, TaskContext, CallAPI, run_action
-from .prompts import create_chat
-from .prompts import BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE, SUMMARY_PROMPT_CODE, SUMMARY_PROMPT_SEARCH
+from .utils import Agent, select_env, truncate_text, is_weird, TaskContext, run_action, AgentLoopOutput, AgentLoopMetrics
+from .prompts import create_chat, BRANCH_MESSAGE_SEARCH, BRANCH_MESSAGE, SUMMARY_PROMPT_CODE, SUMMARY_PROMPT_SEARCH
 from .verifier import judge_scope
 
 
@@ -52,10 +50,10 @@ def clean_response(response):
 async def process_item(
         item: DataProto,
         context: TaskContext,
-        LLMClass=CallLLM,
-) -> DataProto:
+) -> Union[AgentLoopOutput, list[AgentLoopOutput]]:
     os.environ["no_proxy"] = ""
     tokenizer = context.tokenizer
+
     config = context.config.actor_rollout_ref.rollout
     is_train = context.is_train
 
@@ -64,6 +62,9 @@ async def process_item(
             config.response_length = getattr(config.plugin, "val_response_length", None)
 
     ability = item.non_tensor_batch['ability'][0]
+
+    uid = item.non_tensor_batch.get('uid', uuid4().hex)
+    gen_uid = item.non_tensor_batch.get('gen_uid', None)
 
     # Select env
     EnvClass = select_env(ability, config, )
@@ -75,15 +76,14 @@ async def process_item(
     except Exception as e:
         print(f"[Error] during environment init: {str(e)}")
 
-    user_prompt, agent_config = await env.get_data(item, context)
-    workflow = item.non_tensor_batch['extra_info'][0].get('workflow', None) or getattr(config.plugin, "workflow",
-                                                                                       "search")
+    # Create prompt
+    workflow = item.non_tensor_batch['extra_info'][0].get('workflow', None) or getattr(config.plugin, "workflow", "search")
     user_prompt = create_chat(env.instance_info['problem_statement'], workflow, item)
 
     branch_prompt = BRANCH_MESSAGE_SEARCH if 'search' in workflow else BRANCH_MESSAGE
     summary_prompt = SUMMARY_PROMPT_SEARCH if 'search' in workflow else SUMMARY_PROMPT_CODE
 
-    max_turn = agent_config.get("max_turn", 64)
+    max_turn = getattr(config.plugin, 'max_turn', 64) if config.plugin else 64
     max_session = getattr(config.plugin, "max_session", 5)
     if not is_train:
         max_session = getattr(config.plugin, "val_max_session", max_session)
@@ -94,10 +94,7 @@ async def process_item(
     max_traj = getattr(config.plugin, "max_traj", None)
     enable_summary = getattr(config.plugin, "enable_summary", False)
 
-    host = context.server_host
-    port = context.server_port
-
-    llm_client = LLMClass(host, port, tokenizer, config, meta_info=agent_config.get("meta_info", {}))
+    llm_client = context.llm_client
 
     prompt_turn = len(user_prompt)
     agent = dict()
@@ -334,34 +331,38 @@ async def process_item(
                             agent[name].set_cache('reward', 0 + 0.2)
 
     for name in agent if is_train else ['main']:  # in eval only return main agent
-        out = await agent[name].dataproto()
-        messages = agent[name].messages()
+        out = await agent[name].get_data()
+        agent_reward = score[1]
         if process_reward is not None and 'flat' in process_reward and 'reward' in agent[name].info_cache:
-            out = await env.update_dataproto(out, item, messages, ('', agent[name].info_cache['reward']), reward_dict,
-                                             tag=name, metrics=agent[name].get_metrics())
-        else:
-            out = await env.update_dataproto(out, item, messages, score, reward_dict,
-                                             tag=name, metrics=agent[name].get_metrics())
-        out.batch['is_overlong'] = torch.Tensor([mask_rollout])
-        session_message_str = print_chat(session_message)
-        out.non_tensor_batch['message_str'] = np.array([session_message_str], dtype=object)
-        meta_info = f"N: {len(agent)} | {name}"
-        out.non_tensor_batch['meta_info'] = np.array([meta_info], dtype=object)
+            agent_reward = agent[name].info_cache['reward']
+        out = AgentLoopOutput(
+            prompt_ids=out['prompt_ids'],
+            response_ids=out['response_ids'],
+            response_mask=out['response_mask'],
+            response_logprobs=out['response_logprobs'],
+            multi_modal_data={},
+            reward_score=agent_reward,
+            num_turns=out['num_turns'],
+            metrics=AgentLoopMetrics(),
+            extra_fields={
+                'messages': out['messages'],
+                'env_stats': copy.deepcopy(env.stats) if hasattr(env, 'stats') else {},
+                'num_branches': len(branches),
+                'branch_names': branches,
+                'mask_rollout': mask_rollout,
+                'is_finish': is_finish,
+                'agent_name': name,
+                'message_str': print_chat(session_message),
+                'meta_info': f"N: {len(agent)} | {name}",
+                'process_reward_mask': out['response_mask'],
+                'uid': uid,
+                'gen_uid': gen_uid,
+            }
+        )
+
         outs.append(copy.deepcopy(out))
 
     if max_traj is not None and len(outs) > max_traj:
         idx = [0] + sorted(random.sample(range(1, len(outs)), k=max_traj - 1))
         outs = [outs[i] for i in idx]
-
-    try:
-        res = DataProto.concat(outs)
-        return res
-    except Exception as e:
-        breakpoint()
-        return
-
-
-# @register_handler("agent/fold_agent")
-# class ReActAgent(AsyncAgent):
-#     async def __call__(self, item: DataProto, context: TaskContext, **kwargs):
-#         return await process_single_batch(item, context)
+    return outs

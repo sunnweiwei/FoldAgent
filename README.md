@@ -5,11 +5,63 @@ Paper: https://arxiv.org/pdf/2510.11967
 <img width="4239" height="4110" alt="cover" src="https://github.com/user-attachments/assets/9c9c0b67-ccd8-4a4b-859b-22f613f41954" />
 
 ## Training
-Coming soon
+
+Note: This is an open-source re-implementation based on `agent_loop` in verl. This may differ from the code we used to train the model in our paper.
+
+**Key Files**
+```
+FoldAgent/
+├── verl/
+│   ├── experimental/
+│   │   └── agent_loop/            # Base agent loop implementations
+│   └── trainer/
+│       └── ppo/                   # PPO training with FoldGRPO algorithm
+├── agents/
+│   └── fold_agent.py              # Core agent logic (process_item)
+├── envs/
+│   └── local_search.py            # Local search environment
+└── scripts/
+    └── train_fold.py              # Training script
+```
+
+**1. Start Search Server**
+
+Start the search server on a separate machine. This will download the corpus (`Tevatron/browsecomp-plus-corpus`), pre-computed embeddings (`miaolu3/browsecomp-plus`), and load the Qwen3-Embedding-8B model on available GPUs.
+
+```bash
+cd envs && python search_server.py \
+  --model Qwen/Qwen3-Embedding-8B \
+  --corpus Tevatron/browsecomp-plus-corpus \
+  --corpus-embedding-dataset miaolu3/browsecomp-plus \
+  --host 0.0.0.0 \
+  --port 8010
+```
+
+Set environment variables:
+
+```bash
+# URL of the local search server (for BrowseComp-Plus)
+export LOCAL_SEARCH_URL="http://[IP-of-search-server]:8010"
+
+# For LLM-based answer grading
+export OPENAI_API_KEY="your-api-key"
+```
+
+**2. Download Training Data**
+
+Download and decompress the BrowseComp dataset: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
+
+**3. Train on BrowseComp**
+
+Example script to train Qwen3-8B:
+```bash
+bash scripts/train_bc_qwen3_8b.sh
+```
 
 ## Evaluation
 
-### Start Search Server
+**1. Start Search Server**
+
 ```bash
 cd envs && python search_server.py \
   --model Qwen/Qwen3-Embedding-8B \
@@ -19,7 +71,7 @@ cd envs && python search_server.py \
   --port 8000
 ```
 
-### Evaluate on BrowseComp
+**2. Evaluate on BrowseComp**
 
 - Download and decompress data: https://drive.google.com/file/d/1aX5xXAN5R-gLKd8A0AY-troxXJRawyAM/view?usp=sharing
 
@@ -51,7 +103,7 @@ Overall - Avg Score: 0.4067, Success: 150/150
 By Data Source:
   bc_test_easy: 0.8200 (50 items)
   bc_test_hard: 0.0400 (50 items)
-  bc_test_meduim: 0.3600 (50 items)
+  bc_test_medium: 0.3600 (50 items)
 ```
 
 - **ReAct Agent:**  `workflow=search`
@@ -64,7 +116,8 @@ python scripts/eval_bc.py --workflow search [...]
 python scripts/eval_bc.py --workflow search --enable_summary [...]
 ```
 
-### Using Local LLMs (eg vLLM)
+**3. Using Local LLMs (e.g., vLLM)**
+
 ```bash
 # Start vLLM server
 vllm serve ByteDance-Seed/Seed-OSS-36B-Instruct --port 8001 --max-model-len 131072
@@ -86,8 +139,9 @@ python scripts/eval_bc.py \
   --output_dir results
 ```
 
-### Evaluation on SWE-Bench Verified
-Coming soon
+### Evaluation and training on SWE-Bench Verified
+
+
 
 ## Cite
 

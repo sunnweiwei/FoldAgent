@@ -8,9 +8,12 @@ import time
 import uuid
 from itertools import groupby
 from typing import *
+from unidiff import PatchedFile, PatchSet
+from unidiff.errors import UnidiffParseError
 import numpy as np
 import requests
-import torch
+
+# import torch
 
 
 ENV_PREFIX_MAP = {}
@@ -35,18 +38,16 @@ def get_agent_env_from_str(env_str: str):
         raise NotImplementedError(f"Unknown env_str: {env_str}")
 
 
-
 class GymEnv:
     # Gym stype env wrapper
     def __init__(self, config, tokenizer, ability):
-        self.config = config
-        self.tokenizer = tokenizer
-        self.ability = ability
+        self.env_str = ability
         self.gym = get_agent_env_from_str(ability)
         self.instance_info = self.gym.instance_info
         self.stats = collections.Counter()
         self.stats['finish'] = 0
         self.env_fail = False
+        self.config = config
 
     async def init_env(self, item):
         start_env = time.time()
@@ -66,57 +67,25 @@ class GymEnv:
         self.stats['env_init_time'] = int(time.time() - start_env)
         print('ENV START COST', time.time() - start_env)
 
-    async def get_data(self, item, context):
-        if 'prompt' in item.non_tensor_batch['extra_info'][0]:
-            prompt = item.non_tensor_batch['extra_info'][0]['prompt']
-            conversations = [
-                {'role': 'system', 'content': prompt[0]['content']},
-                {'role': 'user', 'content': prompt[1]['content']},
-            ]
-
-        else:
-            instance_info = self.instance_info
-            user_prompt = instance_info['problem_statement']
-            system_prompt = "\nYou are OpenHands agent, a helpful AI assistant that can interact with a computer to solve tasks.\n<IMPORTANT>\n* If user provides a path, you should NOT assume it's relative to the current working directory. Instead, you should explore the file system to find the file before working on it.\n* When configuring git credentials, use \"openhands\" as the user.name and \"openhands@all-hands.dev\" as the user.email by default, unless explicitly instructed otherwise.\n* The assistant MUST NOT include comments in the code unless they are necessary to describe non-obvious behavior.\n</IMPORTANT>\n\nYou have access to the following functions:\n\n---- BEGIN FUNCTION #1: execute_bash ----\nDescription: Execute a bash command in the terminal.\n* Long running commands: For commands that may run indefinitely, it should be run in the background and the output should be redirected to a file, e.g. command = `python3 app.py > server.log 2>&1 &`.\n* One command at a time: You can only execute one bash command at a time. If you need to run multiple commands sequentially, you can use `&&` or `;` to chain them together.\n\nParameters:\n  (1) command (string, required): The bash command to execute. Can be empty string to view additional logs when previous exit code is `-1`. Can be `C-c` (Ctrl+C) to interrupt the currently running process. Note: You can only execute one bash command at a time. If you need to run multiple commands sequentially, you can use `&&` or `;` to chain them together.\n---- END FUNCTION #1 ----\n\n---- BEGIN FUNCTION #2: finish ----\nDescription: Finish the interaction when the task is complete OR if the assistant cannot proceed further with the task.\nNo parameters are required for this function.\n---- END FUNCTION #2 ----\n\n---- BEGIN FUNCTION #3: str_replace_editor ----\nDescription: Custom editing tool for viewing, creating and editing files in plain-text format\n* State is persistent across command calls and discussions with the user\n* If `path` is a file, `view` displays the result of applying `cat -n`. If `path` is a directory, `view` lists non-hidden files and directories up to 2 levels deep\n* The `create` command cannot be used if the specified `path` already exists as a file\n* If a `command` generates a long output, it will be truncated and marked with `<response clipped>`\n* The `undo_edit` command will revert the last edit made to the file at `path`\n\nNotes for using the `str_replace` command:\n* The `old_str` parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!\n* If the `old_str` parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in `old_str` to make it unique\n* The `new_str` parameter should contain the edited lines that should replace the `old_str`\n\nParameters:\n  (1) command (string, required): The commands to run. Allowed options are: `view`, `create`, `str_replace`, `insert`, `undo_edit`.\nAllowed values: [`view`, `create`, `str_replace`, `insert`, `undo_edit`]\n  (2) path (string, required): Absolute path to file or directory, e.g. `/workspace/file.py` or `/workspace`.\n  (3) file_text (string, optional): Required parameter of `create` command, with the content of the file to be created.\n  (4) old_str (string, optional): Required parameter of `str_replace` command containing the string in `path` to replace.\n  (5) new_str (string, optional): Optional parameter of `str_replace` command containing the new string (if not given, no string will be added). Required parameter of `insert` command containing the string to insert.\n  (6) insert_line (integer, optional): Required parameter of `insert` command. The `new_str` will be inserted AFTER the line `insert_line` of `path`.\n  (7) view_range (array, optional): Optional parameter of `view` command when `path` points to a file. If none is given, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting `[start_line, -1]` shows all lines from `start_line` to the end of the file.\n---- END FUNCTION #3 ----\n\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<function=example_function_name>\n<parameter=example_parameter_1>value_1</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format, start with <function= and end with </function>\n- Required parameters MUST be specified\n- Only call one function at a time\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after.\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>\n\n"
-            conversations = [
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt},
-            ]
-        meta_info = copy.copy(item.meta_info)
-        meta_info['uid'] = item.non_tensor_batch['uid'][0]
-        meta_info['reward_model'] = item.non_tensor_batch['reward_model'][0]
-
-        if "max_turn" in item.meta_info:
-            max_turn = item.meta_info["max_turn"]
-        else:
-            if context.is_train:
-                max_turn = self.config.plugin.max_turn
-            else:
-                if "val_max_turn" in self.config.plugin:
-                    max_turn = self.config.plugin.val_max_turn
-                else:
-                    max_turn = self.config.plugin.max_turn
-        return conversations, {'max_turn': max_turn, 'instance_info': self.instance_info, 'meta_info': meta_info}
-
     async def run_action(self, response):
         self.stats['action'] += 1
         success, observation = await asyncio.to_thread(self.gym.step, response)
         if observation == "Task finished":
-            return {'action': 'finish'}
+            return {'observation': 'finish'}
 
         return {'observation': observation}
 
     async def get_reward(self, item, messages, context):
         if self.env_fail:  # If env fail, direct return 0 reward
             return "", 0, {}
-
         reward = await asyncio.to_thread(lambda: self.gym.reward)
-        self.gym.release()
+        # Don't release here - keep working directory alive for future operations
+        # Release only happens when environment is closed via close_env()
         return "", reward, {}
 
     async def update_dataproto(self, out, item, messages, score, reward_dict, tag='main', metrics=None):
         final_score = score[1]
-        out.batch['swalm_agent_score'] = torch.Tensor([final_score]).to(torch.float32)
+        # out.batch['swalm_agent_score'] = torch.Tensor([final_score]).to(torch.float32)
         out.meta_info["xperf_metrics"] = metrics
         out.meta_info["generation_kwargs"] = item.meta_info['generation_kwargs']
         out.non_tensor_batch = copy.deepcopy(item.non_tensor_batch)
@@ -130,7 +99,6 @@ class GymEnv:
                       "stats": stats}
         out.non_tensor_batch['extra_data'] = np.array([extra_data, ], dtype=object)
         return out
-
 
 
 NO_FNCALL_PROMPT = """
@@ -250,9 +218,37 @@ def convert_non_fncall_messages_to_fncall_messages(messages, tools):
     if not set(tool.get('parameters', {}).get('required', [])).issubset(params.keys()): return messages[0]
 
     return [{'role': 'assistant', 'content': content.split('<function=')[0].strip(),
-            'tool_calls': [{'index': 1, 'id': 'toolu_01', 'type': 'function',
-                            'function': {'name': name, 'arguments': json.dumps(params)}}]}]
+             'tool_calls': [{'index': 1, 'id': 'toolu_01', 'type': 'function',
+                             'function': {'name': name, 'arguments': json.dumps(params)}}]}]
 
+
+def codeact_tool():
+    execute_bash = {'type': 'function', 'function': {'name': 'execute_bash', 'parameters': {'type': 'object',
+                                                                                            'properties': {'command': {
+                                                                                                'type': 'string'}},
+                                                                                            'required': ['command']}}}
+
+    str_replace_editor = {'type': 'function', 'function': {'name': 'str_replace_editor',
+                                                           'parameters': {'type': 'object', 'properties': {
+                                                               'command': {'type': 'string',
+                                                                           'enum': ['view', 'create', 'str_replace',
+                                                                                    'insert', 'undo_edit']},
+                                                               'path': {'type': 'string'},
+                                                               'file_text': {'type': 'string'},
+                                                               'old_str': {'type': 'string'},
+                                                               'new_str': {'type': 'string'},
+                                                               'insert_line': {'type': 'integer'},
+                                                               'view_range': {'type': 'array',
+                                                                              'items': {'type': 'integer'}}},
+                                                                          'required': ['command', 'path']}}}
+
+    think = {'type': 'function', 'function': {'name': 'think', 'parameters': {'type': 'object', 'properties': {
+        'content': {'type': 'string'}}, 'required': ['content']}}}
+
+    finish = {'type': 'function', 'function': {'name': 'finish', 'parameters': {'type': 'object', 'properties': {
+        'message': {'type': 'string'}, 'answer': {'type': 'string'}}}}}
+
+    return [execute_bash, str_replace_editor, think, finish]
 
 
 @register_env
@@ -271,7 +267,7 @@ class FileLocEnv:
 
         # Get instance ID for base_dir mapping
         self.instance_id = self.instance_info.get('instance_id', 'default')
-        base_dir_base = os.getenv('BASE_DIR_PATH', './gym_data')
+        base_dir_base = os.getenv('LOCAL_REPO_PATH')
         self.base_dir = f"{base_dir_base}/{self.instance_id}"
         self.answer = None
 
@@ -279,6 +275,7 @@ class FileLocEnv:
         self._finish_called = False
         self.think_history = []
         self.client = SimpleHttpClient(service_url)
+        self.tools = codeact_tool()
 
     def ping(self):
         """Check if the service is responding"""
@@ -309,21 +306,33 @@ class FileLocEnv:
                 else:
                     new_url = f"http://localhost:{port}"
 
-                # Test this port
+                # Test this port directly without calling ping() to avoid recursion
                 old_timeout = self.client.timeout
                 self.client.timeout = 3  # Short timeout for testing
+                old_base_url = self.client.base_url
                 self.client.base_url = new_url
 
-                if self.ping():
-                    print(f"Switched to port {port}")
-                    self.service_url = new_url
+                # Direct ping test without recursion
+                try:
+                    response = self.client.get('ping')
+                    if isinstance(response, dict):
+                        content = response.get('content', response.get('result', ''))
+                    else:
+                        content = str(response)
+
+                    if content == 'pong' or 'pong' in content.lower():
+                        print(f"Switched to port {port}")
+                        self.service_url = new_url
+                        self.client.timeout = old_timeout
+                        return True
+                except:
+                    pass
+                finally:
+                    self.client.base_url = old_base_url
                     self.client.timeout = old_timeout
-                    return True
 
             except:
                 pass
-            finally:
-                self.client.timeout = old_timeout
 
         return False
 
@@ -432,7 +441,7 @@ class FileLocEnv:
                 # Call the service
                 observation = self._call_service('code_act', name, arguments)
                 observation = truncate_text(observation, max_lines=500, max_length=6_000, merge_repeat=True,
-                                            merge_num=32, max_tokens=10_000)
+                                            merge_num=32, )
                 return True, observation
 
         except Exception as e:
@@ -444,7 +453,7 @@ class FileLocEnv:
         if "@" in env_str:
             env_str = env_str.split("@", 1)[1]
         # Extract service URL from kwargs or use default
-        service_url = os.getenv('LOC_IP_ADDRESS', 'http://localhost:8000')
+        service_url = os.getenv('LOCAL_REPO_URL', 'http://localhost:8011')
         return cls(env_str=env_str, service_url=service_url, **kwargs)
 
     @property
@@ -493,7 +502,7 @@ class FuncLocEnv(FileLocEnv):
     """
     env_str_prefix = "FuncLocEnv"
 
-    def reward_f1(self, predicted: str, label_functions: str) -> float:
+    def reward_f1(self, predicted: str, label_functions: list) -> float:
         """Return F1 score between predicted file list and files edited in a diff."""
 
         def clean(path: str) -> str:
@@ -529,10 +538,12 @@ class ChangeSimilarity(TypedDict):
     similarity: float
 
 
+
+
 @register_env
 class RepairEnv:
     """
-    Support file editing (simulated edition) and read-only bash actions. No docker.
+    Copy repo to tmp and support: read, edit, read-only cmd
     """
     env_str_prefix = "RepairEnv"
 
@@ -543,535 +554,139 @@ class RepairEnv:
         self.service_url = service_url
         self.kwargs = kwargs
         self.instance_id = self.instance_info.get('instance_id', 'default')
-        base_dir_base = os.getenv('BASE_DIR_PATH', './gym_data')
-        self.base_dir = f"{base_dir_base}/{self.instance_id}"
-        self.answer = None
 
+        base_dir_base = os.getenv('LOCAL_REPO_PATH')
+        self.base_dir = f"{base_dir_base}/{self.instance_id}"
+
+        # Working directory with symlinks - created lazily on first edit
+        self.working_dir = None
+        self._working_dir_initialized = False
+
+        # Track original content for git diff generation
+        self.file_originals = {}  # {path: original_content}
+
+        self.answer = None
         self._finish_called = False
         self.think_history = []
 
-        self.file_cache = {}  # {path: {'original': str, 'current': str}}
-
         self.client = SimpleHttpClient(service_url)
+        self.tools = codeact_tool()
 
+    @classmethod
+    def from_env_str(cls, env_str: str, **kwargs):
+        """Create environment from environment string"""
+        if "@" in env_str:
+            env_str = env_str.split("@", 1)[1]
+        # Extract service URL from kwargs or use default
+        service_url = os.getenv('LOCAL_REPO_URL')
+        return cls(env_str=env_str, service_url=service_url, **kwargs)
 
-    def _get_file_content(self, path: str) -> str:
-        """Get file content, either from cache or by reading from server"""
-        if path in self.file_cache:
-            return self.file_cache[path]['current']
+    def _ensure_working_dir(self):
+        """Create working directory with actual copy of repo"""
+        if self._working_dir_initialized:
+            return
 
-        cat_result = self._call_service('code_act', 'execute_bash', {'command': f'cat "{path}"'})
-        if '[Exit code:' in cat_result:
-            cat_result = "\n".join(cat_result.splitlines()[:-2])
+        import subprocess
+        import shutil
 
-        if ('No such file or directory' in cat_result or
-                'cat:' in cat_result or
-                'cannot access' in cat_result.lower()):
-            raise FileNotFoundError(f"File {path} not found")
+        # Create unique working directory
+        # Use /usr1 which has much more disk space than /tmp
+        cache_base = os.getenv('REPO_CACHE_DIR')
+        self.working_dir = f"{cache_base}/{self.session_id}"
 
-        self.file_cache[path] = {
-            'original': cat_result,
-            'current': cat_result
-        }
+        # Clean up if exists (shouldn't happen with UUID)
+        if os.path.exists(self.working_dir):
+            shutil.rmtree(self.working_dir)
 
-        return cat_result
+        os.makedirs(self.working_dir, exist_ok=True)
 
-    def _str_replace_local(self, path: str, old_str: str, new_str: str) -> str:
-        """Perform str_replace operation locally on cached content"""
-        import re
-
-        path = path.strip().lstrip('/')
-        path = re.sub(r'^(?:\.?/)?(?:testbed/|workspace/)', '', path)
-        path = os.path.normpath(path)
-
-        try:
-            current_content = self._get_file_content(path)
-        except FileNotFoundError:
-            return f"Error: File {path} not found"
-
-        # Expand tabs
-        old_str = old_str.expandtabs()
-        new_str = new_str.expandtabs() if new_str is not None else ''
-        current_content = current_content.expandtabs()
-
-        # Find all occurrences using regex
-        pattern = re.escape(old_str)
-        matches = list(re.finditer(pattern, current_content))
-
-        if not matches:
-            return f"Error: No replacement was performed, old_str `{old_str}` did not appear verbatim in {path}."
-
-        if len(matches) > 1:
-            line_numbers = []
-            for match in matches:
-                line_num = current_content.count('\n', 0, match.start()) + 1
-                line_numbers.append(line_num)
-            line_numbers = sorted(set(line_numbers))
-            return f"Error: Multiple occurrences of old_str `{old_str}` found in lines {line_numbers}. Please ensure it is unique."
-
-        # Single occurrence - perform replacement
-        match = matches[0]
-        replacement_line = current_content.count('\n', 0, match.start()) + 1
-
-        new_content = (
-                current_content[:match.start()] +
-                new_str +
-                current_content[match.end():]
+        # Copy the repo structure (base_dir already contains testbed/)
+        # cp -r will dereference symlinks and create real copies
+        # This ensures original repo is never modified
+        result = subprocess.run(
+            f'cp -r "{self.base_dir}/"* "{self.working_dir}/" 2>/dev/null || true',
+            shell=True,
+            capture_output=True,
+            text=True
         )
 
-        # Update cache
-        self.file_cache[path]['current'] = new_content
+        self._working_dir_initialized = True
+        print(f"Created working directory: {self.working_dir}")
 
-        # Generate snippet around the change for output
-        lines = new_content.split('\n')
-        context_window = 10
-        start_line = max(0, replacement_line - context_window - 1)
-        end_line = min(len(lines), replacement_line + context_window + new_str.count('\n'))
-
-        snippet_lines = lines[start_line:end_line]
-        snippet = '\n'.join(f"{start_line + i + 1:4d} | {line}" for i, line in enumerate(snippet_lines))
-
-        return f"The file {path} has been edited. Here is the result of running `cat -n` on a snippet of {path}:\n{snippet}\nReview the changes and make sure they are as expected. Edit the file again if necessary."
-
-    def _view_file_local(self, path: str, start_line: int = None, end_line: int = None) -> str:
-        """View file content from cache or server, or list directory contents"""
-        import re
-        import os
-
-        path = path.strip()
-        if path != '/testbed':
-            path = path.lstrip('/')
-            path = re.sub(r'^(?:\.?/)?(?:testbed/|workspace/)', '', path)
-        path = os.path.normpath(path)
-
-        # First, try to get file content (this will fail if it's a directory)
-        try:
-            content = self._get_file_content(path)
-            lines = content.split('\n')
-
-            # Handle line range
-            if start_line is not None:
-                start_line = max(1, start_line)
-                start_idx = start_line - 1
-            else:
-                start_idx = 0
-                start_line = 1
-
-            if end_line is not None:
-                end_idx = min(len(lines), end_line)
-            else:
-                end_idx = len(lines)
-
-            # Show numbered lines
-            snippet_lines = lines[start_idx:end_idx]
-            snippet = '\n'.join(f"{start_line + i:4d} | {line}" for i, line in enumerate(snippet_lines))
-
-            total_lines = len(lines)
-            if start_idx > 0 or end_idx < total_lines:
-                snippet = f"Here is the result of running `cat -n` on {path} (lines {start_line}-{end_idx}):\n{snippet}"
-            else:
-                snippet = f"Here is the result of running `cat -n` on {path}:\n{snippet}"
-
-            return snippet
-
-        except FileNotFoundError:
-            # If file not found, try to list as directory
-            return self._list_directory_local(path)
-
-    def _list_directory_local(self, path: str) -> str:
-        """List directory contents, including files from local cache"""
-
-        # Try to get directory listing from server
-        try:
-            ls_result = self._call_service('code_act', 'execute_bash', {'command': f'ls -la "{path}"'})
-
-            # Check if it's actually a directory listing
-            if '[Exit code:' in ls_result:
-                ls_result = "\n".join(ls_result.splitlines()[:-2])
-
-            if ('No such file or directory' in ls_result or
-                    'ls:' in ls_result or
-                    'cannot access' in ls_result.lower()):
-
-                # Check if we have any cached files in this directory
-                cached_files = self._get_cached_files_in_dir(path)
-                if cached_files:
-                    # Directory doesn't exist on server but we have cached files
-                    result = f""
-                    for filename in sorted(cached_files):
-                        result += f"{filename}\n"
-                    return result
-                else:
-                    return f"Error: Directory {path} not found"
-
-            # Parse the ls output to get existing files
-            existing_files = set()
-            lines = ls_result.strip().split('\n')
-
-            # Skip the first line if it's a total line
-            start_idx = 0
-            if lines and lines[0].startswith('total '):
-                start_idx = 1
-
-            for line in lines[start_idx:]:
-                if line.strip():
-                    parts = line.split()
-                    if len(parts) >= 9:  # Standard ls -la format
-                        filename = ' '.join(parts[8:])  # Handle filenames with spaces
-                        if filename not in ['.', '..']:
-                            existing_files.add(filename)
-
-            # Add cached files that are in this directory
-            cached_files = self._get_cached_files_in_dir(path)
-
-            # Combine and display
-            all_files = existing_files.union(cached_files)
-
-            if not all_files:
-                return f"Directory {path} is empty"
-
-            result = f""
-            for filename in sorted(all_files):
-                if filename in cached_files and filename not in existing_files:
-                    result += f"{filename}\n"
-                elif filename in cached_files:
-                    result += f"{filename}\n"
-                else:
-                    result += f"{filename}\n"
-
-            return result
-
-        except Exception as e:
-            # If bash command failed, check for cached files only
-            cached_files = self._get_cached_files_in_dir(path)
-            if cached_files:
-                result = f""
-                for filename in sorted(cached_files):
-                    result += f"{filename}\n"
-                return result
-            else:
-                return f"Error: Directory {path} not found"
-
-    def _get_cached_files_in_dir(self, dir_path: str) -> set:
-        """Get all cached files that are in the specified directory"""
-        import os
-
-        # Normalize directory path
-        dir_path = os.path.normpath(dir_path)
-        if dir_path == '.':
-            dir_path = ''
-
-        cached_files = set()
-        for file_path in self.file_cache.keys():
-            file_path = os.path.normpath(file_path)
-            file_dir = os.path.dirname(file_path)
-
-            # Check if this file is directly in the specified directory
-            if file_dir == dir_path:
-                filename = os.path.basename(file_path)
-                cached_files.add(filename)
-
-        return cached_files
-
-    def _execute_bash_local(self, command: str) -> str:
-        """Execute bash command with cached file awareness"""
-        import shlex, re
-
-        if not command.strip():
-            return "Error: Empty command"
-
-        try:
-            cmd_parts = shlex.split(command)
-        except ValueError:
-            cmd_parts = command.split()
-
-        if not cmd_parts:
-            return "Error: Empty command"
-
-        cmd_name = cmd_parts[0].split('/')[-1]  # Handle /bin/ls -> ls
-
-        # Handle commands that should see cached files
-        if cmd_name == 'ls':
-            return self._handle_ls_command(cmd_parts)
-        elif cmd_name == 'cat':
-            return self._handle_cat_command(cmd_parts)
-        elif cmd_name in ['head', 'tail', 'wc']:
-            return self._handle_file_command(cmd_name, cmd_parts)
-        elif cmd_name == 'find':
-            return self._handle_find_command(command)
-        elif cmd_name in ['grep', 'rg']:
-            return self._handle_grep_command(command, cmd_parts)
-        else:
-            return self._call_service('code_act', 'execute_bash', {'command': command})
+    def _get_working_path(self, rel_path: str) -> str:
+        """Get the full path in working directory"""
+        self._ensure_working_dir()
+        # Clean the path but keep testbed/ prefix since working_dir contains testbed/
+        cleaned = self._clean_path(rel_path)
+        return os.path.join(self.working_dir, cleaned)
 
     def _clean_path(self, path: str) -> str:
-        """Clean and normalize file path"""
+        """Clean and normalize file path - keep testbed/ prefix since working_dir contains it"""
+        import re
         path = path.strip()
-        if path != '/testbed':
-            path = path.lstrip('/')
-            path = re.sub(r'^(?:\.?/)?(?:testbed/|workspace/)', '', path)
+        # Remove leading slashes and ./ prefix
+        path = path.lstrip('/')
+        path = re.sub(r'^\./', '', path)
+        # Normalize path (handle .. etc)
+        path = os.path.normpath(path)
+        # If path doesn't start with testbed, add it (since working_dir/testbed/ is where files are)
+        if not path.startswith('testbed') and path != '.':
+            path = os.path.join('testbed', path)
         return path
 
-    def _handle_ls_command(self, cmd_parts: list) -> str:
-        path = '.'
-        for part in cmd_parts[1:]:
-            if not part.startswith('-'):
-                path = part
-                break
-        return self._list_directory_local(self._clean_path(path))
+    def _read_file(self, rel_path: str) -> str:
+        """Read file content from working directory"""
+        self._ensure_working_dir()
+        full_path = self._get_working_path(rel_path)
 
-    def _handle_cat_command(self, cmd_parts: list) -> str:
-        if len(cmd_parts) < 2:
-            return "cat: missing file operand"
+        if not os.path.exists(full_path):
+            raise FileNotFoundError(f"File {rel_path} not found")
 
-        file_path = self._clean_path(cmd_parts[1])
-        if file_path in self.file_cache:
-            return self.file_cache[file_path]['current']
+        # Follow symlink if needed
+        real_path = os.path.realpath(full_path)
+        with open(real_path, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read()
 
-        return self._call_service('code_act', 'execute_bash', {'command': ' '.join(cmd_parts)})
+    def _write_file(self, rel_path: str, content: str):
+        """Write content to working directory (replaces symlink with real file)"""
+        self._ensure_working_dir()
+        full_path = self._get_working_path(rel_path)
 
-    def _handle_file_command(self, cmd_name: str, cmd_parts: list) -> str:
-        if len(cmd_parts) < 2:
-            return self._call_service('code_act', 'execute_bash', {'command': ' '.join(cmd_parts)})
+        # Store original content for diff if this is first edit
+        if rel_path not in self.file_originals:
+            try:
+                self.file_originals[rel_path] = self._read_file(rel_path)
+            except FileNotFoundError:
+                self.file_originals[rel_path] = ''  # New file
 
-        file_path = self._clean_path(cmd_parts[-1])
-        if file_path not in self.file_cache:
-            return self._call_service('code_act', 'execute_bash', {'command': ' '.join(cmd_parts)})
+        # Create parent directories if needed
+        parent_dir = os.path.dirname(full_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
 
-        content = self.file_cache[file_path]['current']
-        lines = content.splitlines()
+        # Remove symlink if exists and replace with actual file
+        if os.path.islink(full_path):
+            os.unlink(full_path)
 
-        if cmd_name == 'head':
-            num_lines = self._parse_line_count(cmd_parts, 10)
-            return '\n'.join(lines[:num_lines])
-        elif cmd_name == 'tail':
-            num_lines = self._parse_line_count(cmd_parts, 10)
-            return '\n'.join(lines[-num_lines:]) if lines else ''
-        elif cmd_name == 'wc':
-            return f"{len(lines)} {len(content.split())} {len(content)} {file_path}"
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
 
-        return self._call_service('code_act', 'execute_bash', {'command': ' '.join(cmd_parts)})
+    def _execute_bash(self, command: str) -> str:
+        """Execute bash command via repo_server with working directory as base"""
+        self._ensure_working_dir()
 
-    def _parse_line_count(self, cmd_parts: list, default: int) -> int:
-        """Parse -n option for head/tail commands"""
-        for i, part in enumerate(cmd_parts):
-            if part == '-n' and i + 1 < len(cmd_parts):
-                try:
-                    return int(cmd_parts[i + 1])
-                except ValueError:
-                    pass
-            elif part.startswith('-') and part[1:].isdigit():
-                try:
-                    return int(part[1:])
-                except ValueError:
-                    pass
-        return default
-
-    def _handle_find_command(self, command: str) -> str:
-        """Handle find command to include cached files"""
-        server_result = self._call_service('code_act', 'execute_bash', {'command': command})
-
-        # Parse server result
-        if '[Exit code:' in server_result:
-            lines = server_result.splitlines()
-            server_files, exit_info = lines[:-2], lines[-2:]
-        else:
-            server_files, exit_info = server_result.splitlines(), []
-
-        # Add cached files (simple heuristic)
-        all_files = set(server_files) | set(self.file_cache.keys())
-        result = '\n'.join(sorted(all_files))
-
-        return result + ('\n' + '\n'.join(exit_info) if exit_info else '')
-
-    def _handle_grep_command(self, command: str, cmd_parts: list) -> str:
-        """Handle grep command to search in cached files as well as server files"""
+        # repo_server uses base_dir/testbed as working directory, so we need to strip
+        # 'testbed/' prefix from paths in the command to avoid double-testbed paths
         import re
+        # Replace testbed/ at word boundaries (but not /testbed/)
+        # This transforms: "head testbed/README.rst" -> "head README.rst"
+        transformed_command = re.sub(r'(?<![/\w])testbed/', '', command)
 
-        # Extract pattern and options from grep command
-        pattern = None
-        files_to_search = []
-        case_insensitive = False
-        line_numbers = False
-
-        i = 1  # Skip grep command itself
-        while i < len(cmd_parts):
-            arg = cmd_parts[i]
-            if arg == '-i':
-                case_insensitive = True
-            elif arg == '-n':
-                line_numbers = True
-            elif arg.startswith('-'):
-                # Skip other options
-                pass
-            elif pattern is None:
-                pattern = arg
-            else:
-                # This is a file to search
-                files_to_search.append(self._clean_path(arg))
-            i += 1
-
-        if not pattern:
-            # No pattern found, run original command
-            return self._call_service('code_act', 'execute_bash', {'command': command})
-
-        all_results = []
-
-        if files_to_search:
-            # Specific files mentioned - handle each file
-            server_files_to_search = []
-
-            for file_path in files_to_search:
-                if file_path in self.file_cache:
-                    # File is cached - search local version only (it's the current state)
-                    content = self.file_cache[file_path]['current']
-                    lines = content.splitlines()
-
-                    # Compile regex pattern
-                    flags = re.IGNORECASE if case_insensitive else 0
-                    try:
-                        regex = re.compile(pattern, flags)
-                    except re.error:
-                        pattern_escaped = re.escape(pattern)
-                        regex = re.compile(pattern_escaped, flags)
-
-                    # Search for pattern in cached file
-                    for line_num, line in enumerate(lines, 1):
-                        if regex.search(line):
-                            if line_numbers:
-                                all_results.append(f"{file_path}:{line_num}:{line}")
-                            else:
-                                all_results.append(f"{file_path}:{line}")
-                else:
-                    # File not cached - add to server search list
-                    server_files_to_search.append(file_path)
-
-            # Search server files (only those not in cache)
-            if server_files_to_search:
-                grep_cmd = cmd_parts[0]
-                options = [part for part in cmd_parts[1:] if part.startswith('-')]
-                quoted_files = [f'"{f}"' for f in server_files_to_search]
-                server_command = f"{grep_cmd} {' '.join(options)} {pattern} {' '.join(quoted_files)}"
-                server_result = self._call_service('code_act', 'execute_bash', {'command': server_command})
-
-                # Parse server result and add valid matches
-                if '[Exit code:' in server_result:
-                    lines = server_result.splitlines()
-                    server_output = lines[:-2]
-                else:
-                    server_output = server_result.splitlines()
-
-                for line in server_output:
-                    if line and not line.startswith('grep:') and ':' in line:
-                        all_results.append(line)
-
-        else:
-            # No specific files mentioned - search all files
-            # First run original command on server
-            server_result = self._call_service('code_act', 'execute_bash', {'command': command})
-
-            # Parse server result
-            if '[Exit code:' in server_result:
-                lines = server_result.splitlines()
-                server_output = lines[:-2]
-            else:
-                server_output = server_result.splitlines()
-
-            # Collect files found on server (we'll exclude these from final results if they're cached)
-            server_files_found = set()
-            server_results_by_file = {}
-
-            for line in server_output:
-                if line and not line.startswith('grep:') and ':' in line:
-                    filename = line.split(':', 1)[0]
-                    server_files_found.add(filename)
-                    if filename not in server_results_by_file:
-                        server_results_by_file[filename] = []
-                    server_results_by_file[filename].append(line)
-
-            # Add server results for files NOT in cache
-            for filename, results in server_results_by_file.items():
-                if filename not in self.file_cache:
-                    all_results.extend(results)
-
-            # Search cached files - these override server versions
-            for file_path in self.file_cache.keys():
-                content = self.file_cache[file_path]['current']
-                lines = content.splitlines()
-
-                # Compile regex pattern
-                flags = re.IGNORECASE if case_insensitive else 0
-                try:
-                    regex = re.compile(pattern, flags)
-                except re.error:
-                    pattern_escaped = re.escape(pattern)
-                    regex = re.compile(pattern_escaped, flags)
-
-                # Search for pattern in cached file
-                for line_num, line in enumerate(lines, 1):
-                    if regex.search(line):
-                        if line_numbers:
-                            all_results.append(f"{file_path}:{line_num}:{line}")
-                        else:
-                            all_results.append(f"{file_path}:{line}")
-
-        return '\n'.join(all_results) if all_results else ''
-
-    def generate_git_diff(self) -> str:
-        """Generate git diff for all modified files"""
-        if not self.file_cache:
-            return "No files have been modified."
-
-        import difflib
-
-        all_diffs = []
-
-        for path, content in self.file_cache.items():
-            original = content['original']
-            current = content['current']
-
-            if original == current:
-                continue  # No changes
-
-            original_lines = original.splitlines()
-            current_lines = current.splitlines()
-
-            diff = difflib.unified_diff(
-                original_lines,
-                current_lines,
-                fromfile=f"a/{path}",
-                tofile=f"b/{path}",
-                lineterm='',
-                n=3
-            )
-
-            diff_lines = list(diff)
-            if diff_lines:
-                diff_text = '\n'.join(diff_lines)
-                all_diffs.append(diff_text)
-
-        if not all_diffs:
-            return "No differences found."
-
-        return '\n'.join(all_diffs)
-
-    def ping(self):
-        """Check if the service is responding"""
-        try:
-            response = self.client.get('ping')
-
-            if isinstance(response, dict):
-                content = response.get('content', response.get('result', ''))
-            else:
-                content = str(response)
-
-            return content == 'pong' or 'pong' in content.lower()
-        except Exception as e:
-            print(f"Ping failed: {e}")
-            return False
+        # Use repo_server to execute bash - it handles path transformation and validation
+        return self._call_service('code_act', 'execute_bash', {'command': transformed_command})
 
     def _call_service(self, provider: str, action_id: str, data: dict) -> str:
-        """Call the new_main.py service with base_dir, retry 3 times with 120s timeout each"""
+        """Call repo_server with working directory as base_dir"""
         max_retries = 3
         timeout = 120
 
@@ -1085,153 +700,311 @@ class RepairEnv:
                 payload = {
                     "action_id": action_id,
                     "data": data,
-                    "base_dir": self.base_dir
+                    "base_dir": self.working_dir  # Use working_dir instead of base_dir
                 }
 
                 response = self.client.post(endpoint, payload)
                 self.client.timeout = original_timeout
+
                 if isinstance(response, dict):
-                    return response.get('result', response.get('content', str(response)))
-                else:
-                    return str(response)
+                    result = response.get('result', response.get('content', str(response)))
+                    if isinstance(result, dict) and 'error' in result:
+                        return f"Service error: {result['error']}"
+                    return str(result) if result else ""
+                return str(response)
 
             except Exception as e:
                 self.client.timeout = original_timeout
-
-                error_msg = str(e)
-                print(f"Service call attempt {attempt + 1}/{max_retries} failed: {error_msg}")
-
-                if attempt == max_retries - 1:
-                    if "connection" in error_msg.lower() or "timeout" in error_msg.lower():
-                        return "Service error: Cannot connect to the code execution service. Please check if the service is running."
-                    elif "404" in error_msg:
-                        return f"Service error: Action '{action_id}' not found in provider '{provider}'."
-                    elif "400" in error_msg:
-                        return f"Service error: Invalid request for action '{action_id}'. Please check your parameters."
-                    else:
-                        return f"Service error: {error_msg}"
-
                 if attempt < max_retries - 1:
+                    import time
                     time.sleep(1)
+                    continue
+                return f"Error calling service: {e}"
 
-        return "Service error: All retry attempts failed"
+        return "Error: Max retries exceeded"
+
+    def _view_file(self, path: str, view_range: list = None) -> str:
+        """View file content with optional line range"""
+        path = self._clean_path(path)
+        real_path = self._get_working_path(path)
+
+        # Check if path is a directory
+        if os.path.isdir(real_path):
+            try:
+                items = sorted(os.listdir(real_path))
+                if not items:
+                    return f"Directory {path} is empty"
+                return f"Directory listing for {path}:\n" + "\n".join(items)
+            except Exception as e:
+                return f"Error listing directory {path}: {e}"
+
+        try:
+            content = self._read_file(path)
+        except FileNotFoundError:
+            return f"Error: File {path} not found"
+
+        lines = content.splitlines()
+
+        if view_range and len(view_range) >= 2:
+            start, end = view_range[0], view_range[1]
+            # Convert to 0-indexed
+            start = max(0, start - 1)
+            end = min(len(lines), end)
+            lines = lines[start:end]
+            offset = start
+        else:
+            offset = 0
+
+        # Format with line numbers
+        result = []
+        for i, line in enumerate(lines):
+            line_num = offset + i + 1
+            result.append(f"{line_num:4d} | {line}")
+
+        return '\n'.join(result)
+
+    def _str_replace(self, path: str, old_str: str, new_str: str) -> str:
+        """Replace string in file"""
+        import re
+
+        path = self._clean_path(path)
+
+        try:
+            content = self._read_file(path)
+        except FileNotFoundError:
+            return f"Error: File {path} not found"
+
+        # Expand tabs for consistency
+        old_str = old_str.expandtabs()
+        new_str = new_str.expandtabs() if new_str else ''
+        content = content.expandtabs()
+
+        # Find matches
+        pattern = re.escape(old_str)
+        matches = list(re.finditer(pattern, content))
+
+        if not matches:
+            return f"Error: No replacement was performed, old_str did not appear in {path}"
+
+        if len(matches) > 1:
+            line_numbers = []
+            for match in matches:
+                line_num = content.count('\n', 0, match.start()) + 1
+                line_numbers.append(line_num)
+            return f"Error: Multiple occurrences found in lines {sorted(set(line_numbers))}. Please ensure it is unique."
+
+        # Single match - perform replacement
+        match = matches[0]
+        replacement_line = content.count('\n', 0, match.start()) + 1
+
+        new_content = content[:match.start()] + new_str + content[match.end():]
+        self._write_file(path, new_content)
+
+        # Generate snippet around the change
+        lines = new_content.splitlines()
+        context_window = 5
+        start_line = max(0, replacement_line - context_window - 1)
+        end_line = min(len(lines), replacement_line + context_window + new_str.count('\n'))
+
+        snippet = '\n'.join(f"{start_line + i + 1:4d} | {line}" for i, line in enumerate(lines[start_line:end_line]))
+
+        return f"Replacement successful at line {replacement_line}.\n\n{snippet}"
+
+    def _create_file(self, path: str, content: str) -> str:
+        """Create a new file"""
+        path = self._clean_path(path)
+        full_path = self._get_working_path(path)
+
+        if os.path.exists(full_path) and not os.path.islink(full_path):
+            return f"Error: File {path} already exists"
+
+        self._write_file(path, content)
+        return f"File {path} created successfully"
+
+    def _insert_line(self, path: str, insert_line: int, new_str: str) -> str:
+        """Insert content after a specific line"""
+        path = self._clean_path(path)
+
+        try:
+            content = self._read_file(path)
+        except FileNotFoundError:
+            return f"Error: File {path} not found"
+
+        lines = content.splitlines()
+
+        if insert_line < 0 or insert_line > len(lines):
+            return f"Error: Invalid line number {insert_line}. File has {len(lines)} lines."
+
+        # Insert after the specified line
+        new_lines = new_str.splitlines()
+        lines = lines[:insert_line] + new_lines + lines[insert_line:]
+
+        new_content = '\n'.join(lines)
+        self._write_file(path, new_content)
+
+        # Generate snippet
+        context = 5
+        start = max(0, insert_line - context)
+        end = min(len(lines), insert_line + len(new_lines) + context)
+        snippet = '\n'.join(f"{start + i + 1:4d} | {line}" for i, line in enumerate(lines[start:end]))
+
+        return f"Inserted {len(new_lines)} line(s) after line {insert_line}.\n\n{snippet}"
+
+    def _undo_edit(self, path: str) -> str:
+        """Undo edits by restoring original content"""
+        path = self._clean_path(path)
+
+        if path not in self.file_originals:
+            return f"Error: File {path} has not been edited"
+
+        original = self.file_originals[path]
+        self._write_file(path, original)
+        del self.file_originals[path]
+
+        return f"File {path} restored to original content"
+
+    def generate_git_diff(self) -> str:
+        """Generate git diff for all modified files"""
+        import difflib
+
+        if not self.file_originals:
+            return "No files have been modified."
+
+        all_diffs = []
+
+        for path, original in self.file_originals.items():
+            try:
+                current = self._read_file(path)
+            except FileNotFoundError:
+                current = ''
+
+            if original == current:
+                continue
+
+            # Strip testbed/ prefix from path for diff output to match golden patch format
+            display_path = path
+            if display_path.startswith('testbed/'):
+                display_path = display_path[len('testbed/'):]
+
+            diff = difflib.unified_diff(
+                original.splitlines(),
+                current.splitlines(),
+                fromfile=f"a/{display_path}",
+                tofile=f"b/{display_path}",
+                lineterm='',
+                n=3
+            )
+
+            diff_lines = list(diff)
+            if diff_lines:
+                # Add git-style header for unidiff parser compatibility
+                git_header = f"diff --git a/{display_path} b/{display_path}"
+                all_diffs.append(git_header + '\n' + '\n'.join(diff_lines))
+
+        return '\n'.join(all_diffs) if all_diffs else "No differences found."
 
     def step(self, action, *args, **kwargs):
-        try:
-            if isinstance(action, str):
-                if action.startswith(('execute_bash', 'finish', 'str_replace_editor', 'think')):
-                    if not action.startswith('<function='):
-                        action = '<function=' + action
-                if action.rstrip().endswith('</parameter>') and not action.rstrip().endswith('</function>'):
-                    action = action.rstrip() + '\n</function>'
+        """Execute a single action and return (success, observation) tuple"""
+        import re
 
-            if isinstance(action, str):
-                fncall = convert_non_fncall_messages_to_fncall_messages(
-                    [{'role': 'assistant', 'content': action}], self.tools
-                )[0]
+        # Convert to function call format
+        if isinstance(action, str):
+            # Parse the action string
+            fn_match = re.search(r'<function=([^>]+)>(.*?)</function>', action, re.DOTALL)
+            if not fn_match:
+                return True, "Error: Invalid action format"
+
+            fn_name = fn_match.group(1)
+            fn_body = fn_match.group(2)
+
+            # Parse parameters (support both formats)
+            params = {}
+            for k, v in re.findall(r'<parameter=([^>]+)>(.*?)</parameter>', fn_body, re.DOTALL):
+                params[k] = v.strip()
+            for k, v in re.findall(r'<([a-z_][a-z0-9_]*)>(.*?)</\1>', fn_body, re.DOTALL | re.IGNORECASE):
+                if k.lower() not in ['parameter', 'function'] and k not in params:
+                    params[k] = v.strip()
+        else:
+            fn_name = action['function']
+            params = action['arguments']
+
+
+        # Execute the action and get observation
+        observation = None
+
+        if fn_name == 'execute_bash':
+            observation = self._execute_bash(params.get('command', ''))
+
+        elif fn_name == 'str_replace_editor':
+            command = params.get('command', '').strip().lower()
+            path = params.get('path', '')
+
+            if command == 'view':
+                view_range = None
+                if 'view_range' in params:
+                    try:
+                        import json as json_mod
+                        view_range = json_mod.loads(params['view_range'])
+                    except:
+                        pass
+                observation = self._view_file(path, view_range)
+
+            elif command == 'create':
+                observation = self._create_file(path, params.get('file_text', ''))
+
+            elif command == 'str_replace':
+                observation = self._str_replace(path, params.get('old_str', ''), params.get('new_str', ''))
+
+            elif command == 'insert':
+                try:
+                    insert_line = int(params.get('insert_line', 0))
+                except ValueError:
+                    return True, "Error: insert_line must be an integer"
+                observation = self._insert_line(path, insert_line, params.get('new_str', ''))
+
+            elif command == 'undo_edit':
+                observation = self._undo_edit(path)
+
             else:
-                fncall = {'tool_calls': [{'function': action}]}
+                return True, f"Error: Unknown str_replace_editor command: {command}"
 
-            if 'tool_calls' not in fncall:
-                return True, NO_FNCALL_PROMPT
+        elif fn_name == 'think':
+            content = params.get('content', '')
+            self.think_history.append(content)
+            return True, f"Thought recorded: {content[:100]}..."
 
-            fncall = fncall['tool_calls'][0]['function']
-            if isinstance(fncall['arguments'], str):
-                arguments = json.loads(fncall['arguments'])
-            else:
-                arguments = fncall['arguments']
-            name = fncall['name']
+        elif fn_name == 'finish':
+            self._finish_called = True
+            self.answer = params.get('message', '')
+            return True, "Task finished"
 
-            if name == 'finish':
-                self._finish_called = True
-                return True, "Task finished"
-            elif name == 'think':
-                self.think_history.append(arguments.get('content', ''))
-                return True, AFTER_THINK_PROMPT
-            elif name == 'str_replace_editor':
-                command = arguments.get('command', '')
+        else:
+            return True, f"Error: Unknown function: {fn_name}"
 
-                if command == 'str_replace':
-                    path = arguments.get('path', '')
-                    old_str = arguments.get('old_str', '')
-                    new_str = arguments.get('new_str', '')
+        # Truncate observation and return
+        observation = truncate_text(observation, max_lines=500, max_length=6_000, merge_repeat=True,
+                                    merge_num=32)
+        return True, observation
 
-                    observation = self._str_replace_local(path, old_str, new_str)
-
-                elif command == 'view':
-                    path = arguments.get('path', '')
-                    start_line = arguments.get('view_range', [None, None])[0]
-                    end_line = arguments.get('view_range', [None, None])[1]
-
-                    observation = self._view_file_local(path, start_line, end_line)
-
-                elif command == 'create':
-                    path = arguments.get('path', '')
-                    file_text = arguments.get('file_text', '')
-
-                    import re
-                    path = path.strip().lstrip('/')
-                    path = re.sub(r'^(?:\.?/)?(?:testbed/|workspace/)', '', path)
-                    path = os.path.normpath(path)
-
-                    self.file_cache[path] = {
-                        'original': '',
-                        'current': file_text
-                    }
-
-                    lines = file_text.split('\n')
-                    snippet = '\n'.join(f"{i + 1:4d} | {line}" for i, line in enumerate(lines))
-                    observation = f"File created successfully at: {path}\n{snippet}"
-
-                else:
-                    observation = self._call_service('code_act', name, arguments)
-
-                observation = truncate_text(observation, max_lines=500, max_length=6_000, merge_repeat=True,
-                                            merge_num=32, max_tokens=10_000)
-                return True, observation
-            elif name == 'execute_bash':
-                # Handle bash commands with cached file awareness
-                observation = self._execute_bash_local(arguments.get('command', ''))
-                observation = truncate_text(observation, max_lines=500, max_length=6_000, merge_repeat=True,
-                                            merge_num=32, max_tokens=10_000)
-                return True, observation
-            else:
-                observation = self._call_service('code_act', name, arguments)
-                observation = truncate_text(observation, max_lines=500, max_length=6_000, merge_repeat=True,
-                                            merge_num=32, max_tokens=10_000)
-                return True, observation
-
-        except Exception as e:
-            return False, f"Step failed: {str(e)}"
-
-    @classmethod
-    def from_env_str(cls, env_str: str, **kwargs):
-        """Create environment from environment string"""
-        if "@" in env_str:
-            env_str = env_str.split("@", 1)[1]
-        # Extract service URL from kwargs or use default
-        service_url = os.getenv('LOC_IP_ADDRESS', 'http://localhost:8000')
-        return cls(env_str=env_str, service_url=service_url, **kwargs)
+    def ping(self):
+        """Always return True since we run locally"""
+        return True
 
     @property
-    def finished(self) -> bool:
-        """Check if task is finished"""
-        return 1 if self._finish_called else 0
+    def finished(self):
+        return self._finish_called
 
     def get_filelevel_diff(self, patch_text: str) -> dict[str, str]:
-        from unidiff import PatchedFile, PatchSet
-        from unidiff.errors import UnidiffParseError
+        """Parse unified diff and extract file-level changes"""
+        from unidiff import PatchSet, PatchedFile
+
         try:
             patch = PatchSet(patch_text)
-        except UnidiffParseError:
-            return {}
         except Exception as e:
-            print(f"Unexpected unidiff parsing error: {str(e)}")
             return {}
 
         result = dict[str, str]()
         for patchfile in patch:
-            patchfile: PatchedFile = patchfile
             if patchfile.is_binary_file:
                 continue
             if patchfile.is_rename:
@@ -1253,21 +1026,15 @@ class RepairEnv:
         return result
 
     def extract_changed_lines(self, diff_text: str) -> str:
+        """Extract changed lines from diff (for similarity comparison)"""
         return diff_text
-        if not diff_text:
-            return ""
-        changed_lines = []
-        for line in diff_text.split('\n'):
-            if line.startswith(('+', '-')) and not line.startswith(('+++', '---')):
-                changed_lines.append(line)
-        return '\n'.join(changed_lines)
 
     def compute_change_similarities(self, pred_patch: dict[str, str], oracle_patch: dict[str, str]):
+        """Compute similarity between predicted and oracle patches"""
         import difflib
 
         all_file_paths = set(oracle_patch.keys()).union(set(pred_patch.keys()))
-        similarities = list[ChangeSimilarity]()
-        # similarity_func = lambda a, b: fuzz.ratio(a, b) / 100.0
+        similarities = []
 
         for path in all_file_paths:
             pred_change = pred_patch.get(path, "")
@@ -1284,17 +1051,16 @@ class RepairEnv:
                     autojunk=False,
                 ).ratio()
 
-            similarities.append(
-                ChangeSimilarity(
-                    path=path,
-                    pred_change=pred_change,
-                    oracle_change=oracle_change,
-                    similarity=change_similarity,
-                )
-            )
+            similarities.append({
+                'path': path,
+                'pred_change': pred_change,
+                'oracle_change': oracle_change,
+                'similarity': change_similarity,
+            })
         return similarities
 
     def calculate_reward_unidiff(self, oracle_patches: list[str], pred_patches: list[str]) -> tuple[float, dict]:
+        """Calculate reward using unidiff parsing and similarity matching"""
         pred_patch_dict = dict[str, str]()
         oracle_patch_dict = dict[str, str]()
 
@@ -1311,19 +1077,22 @@ class RepairEnv:
         similarities = self.compute_change_similarities(pred_patch_dict, oracle_patch_dict)
         if len(similarities) == 0:
             return 1.0, dict(similarities=[])
-        reward = sum(map(lambda x: x["similarity"], similarities)) / len(similarities)
+        reward = sum(s["similarity"] for s in similarities) / len(similarities)
         return reward, dict(similarities=similarities)
 
-    def calculate_swe_reward(self) -> tuple[float, dict]:
+    def calculate_swe_reward(self):
+        """Calculate reward based on diff similarity"""
         oracle_patch = self.instance_info.get('patch', '')
         if not oracle_patch:
             return 0.0, {'error': 'No ground truth patch available'}
+
         predicted_diff = self.generate_git_diff()
         if not predicted_diff or predicted_diff == "No files have been modified.":
             if not oracle_patch.strip():
                 return 1.0, {'message': 'Both predicted and oracle patches are empty'}
             else:
                 return 0.0, {'error': 'No predicted changes but oracle patch exists'}
+
         oracle_patches = [oracle_patch] if oracle_patch.strip() else []
         pred_patches = [predicted_diff] if predicted_diff.strip() else []
         reward, metadata = self.calculate_reward_unidiff(oracle_patches, pred_patches)
@@ -1331,15 +1100,34 @@ class RepairEnv:
 
     @property
     def reward(self):
-        if not self.finished:
-            return 0
-        if self.file_cache:
-            reward, metadata = self.calculate_swe_reward()
+        # Always calculate reward based on file edits, regardless of finish status
+        if self.file_originals:
+            reward, _ = self.calculate_swe_reward()
             return reward
         return 0.0
 
     def release(self):
-        pass
+        """Clean up working directory (cache repo)"""
+        import shutil
+        if self.working_dir and os.path.exists(self.working_dir):
+            try:
+                shutil.rmtree(self.working_dir)
+                print(f"Cleaned up working directory: {self.working_dir}")
+                # Reset flag so directory can be recreated if needed
+                self._working_dir_initialized = False
+            except Exception as e:
+                print(f"Warning: Failed to clean up working directory: {e}")
 
     def __del__(self):
-        pass
+        self.release()
+
+async def test_connect():
+    os.environ["LOCAL_REPO_URL"] = 'http://localhost:8011'
+    os.environ["LOCAL_REPO_PATH"] = '/usr1/data/weiweis/PPP-Agent/envs/gym_data'
+    ability = 'FuncLocEnv@{"repo": "astropy/astropy", "instance_id": "astropy__astropy-12907", "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607", "patch": "diff --git a/astropy/modeling/separable.py b/astropy/modeling/separable.py\\n--- a/astropy/modeling/separable.py\\n+++ b/astropy/modeling/separable.py\\n@@ -242,7 +242,7 @@ def _cstack(left, right):\\n         cright = _coord_matrix(right, \'right\', noutp)\\n     else:\\n         cright = np.zeros((noutp, right.shape[1]))\\n-        cright[-right.shape[0]:, -right.shape[1]:] = 1\\n+        cright[-right.shape[0]:, -right.shape[1]:] = right\\n \\n     return np.hstack([cleft, cright])\\n \\n", "test_patch": "diff --git a/astropy/modeling/tests/test_separable.py b/astropy/modeling/tests/test_separable.py\\n--- a/astropy/modeling/tests/test_separable.py\\n+++ b/astropy/modeling/tests/test_separable.py\\n@@ -28,6 +28,13 @@\\n p1 = models.Polynomial1D(1, name=\'p1\')\\n \\n \\n+cm_4d_expected = (np.array([False, False, True, True]),\\n+                  np.array([[True,  True,  False, False],\\n+                            [True,  True,  False, False],\\n+                            [False, False, True,  False],\\n+                            [False, False, False, True]]))\\n+\\n+\\n compound_models = {\\n     \'cm1\': (map3 & sh1 | rot & sh1 | sh1 & sh2 & sh1,\\n             (np.array([False, False, True]),\\n@@ -52,7 +59,17 @@\\n     \'cm7\': (map2 | p2 & sh1,\\n             (np.array([False, True]),\\n              np.array([[True, False], [False, True]]))\\n-            )\\n+            ),\\n+    \'cm8\': (rot & (sh1 & sh2), cm_4d_expected),\\n+    \'cm9\': (rot & sh1 & sh2, cm_4d_expected),\\n+    \'cm10\': ((rot & sh1) & sh2, cm_4d_expected),\\n+    \'cm11\': (rot & sh1 & (scl1 & scl2),\\n+             (np.array([False, False, True, True, True]),\\n+              np.array([[True,  True,  False, False, False],\\n+                        [True,  True,  False, False, False],\\n+                        [False, False, True,  False, False],\\n+                        [False, False, False, True,  False],\\n+                        [False, False, False, False, True]]))),\\n }\\n \\n \\n", "problem_statement": "Modeling\'s `separability_matrix` does not compute separability correctly for nested CompoundModels\\nConsider the following model:\\r\\n\\r\\n```python\\r\\nfrom astropy.modeling import models as m\\r\\nfrom astropy.modeling.separable import separability_matrix\\r\\n\\r\\ncm = m.Linear1D(10) & m.Linear1D(5)\\r\\n```\\r\\n\\r\\nIt\'s separability matrix as you might expect is a diagonal:\\r\\n\\r\\n```python\\r\\n>>> separability_matrix(cm)\\r\\narray([[ True, False],\\r\\n       [False,  True]])\\r\\n```\\r\\n\\r\\nIf I make the model more complex:\\r\\n```python\\r\\n>>> separability_matrix(m.Pix2Sky_TAN() & m.Linear1D(10) & m.Linear1D(5))\\r\\narray([[ True,  True, False, False],\\r\\n       [ True,  True, False, False],\\r\\n       [False, False,  True, False],\\r\\n       [False, False, False,  True]])\\r\\n```\\r\\n\\r\\nThe output matrix is again, as expected, the outputs and inputs to the linear models are separable and independent of each other.\\r\\n\\r\\nIf however, I nest these compound models:\\r\\n```python\\r\\n>>> separability_matrix(m.Pix2Sky_TAN() & cm)\\r\\narray([[ True,  True, False, False],\\r\\n       [ True,  True, False, False],\\r\\n       [False, False,  True,  True],\\r\\n       [False, False,  True,  True]])\\r\\n```\\r\\nSuddenly the inputs and outputs are no longer separable?\\r\\n\\r\\nThis feels like a bug to me, but I might be missing something?\\n", "hints_text": "", "created_at": "2022-03-03T15:14:54Z", "version": "4.3", "FAIL_TO_PASS": "[\\"astropy/modeling/tests/test_separable.py::test_separable[compound_model6-result6]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model9-result9]\\"]", "PASS_TO_PASS": "[\\"astropy/modeling/tests/test_separable.py::test_coord_matrix\\", \\"astropy/modeling/tests/test_separable.py::test_cdot\\", \\"astropy/modeling/tests/test_separable.py::test_cstack\\", \\"astropy/modeling/tests/test_separable.py::test_arith_oper\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model0-result0]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model1-result1]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model2-result2]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model3-result3]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model4-result4]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model5-result5]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model7-result7]\\", \\"astropy/modeling/tests/test_separable.py::test_separable[compound_model8-result8]\\", \\"astropy/modeling/tests/test_separable.py::test_custom_model_separable\\"]", "environment_setup_commit": "298ccb478e6bf092953bca67a3d29dc6c35f6752", "difficulty": "15 min - 1 hour", "source": "sweb", "edited_functions": ["astropy/modeling/separable.py:_cstack"]}'
+    env = GymEnv(None, None, ability)
+    obs = await env.run_action('<function=execute_bash><parameter=command>ls -la /testbed</parameter></function>')
+    print(obs['observation'])
+
+if __name__ == '__main__':
+    asyncio.run(test_connect())

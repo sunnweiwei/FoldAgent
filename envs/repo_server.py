@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-High-Performance Code Execution Server
-- Pre-allocated worker thread pool (3000+ threads)
-- Multiple event loops for load distribution
-- Lock-free queues and connection pooling
-- Removed rate limiting bottlenecks
-- Batch processing capabilities
-"""
-
 import asyncio
 import concurrent.futures
 import logging
@@ -39,7 +30,6 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-
 from pydantic import BaseModel as PydanticBaseModel, Field
 import pydantic
 from packaging import version
@@ -52,6 +42,7 @@ class BaseModel(PydanticBaseModel):
     else:
         def model_dump(self, **kwargs):
             return self.dict(**kwargs)
+
 
 # ========== Ultra-High Performance Configuration ==========
 MAX_WORKER_THREADS = 3000  # Pre-allocated thread pool
@@ -631,28 +622,6 @@ READONLY_COMMANDS = {
     'ifconfig', 'ip', 'ping', 'curl', 'wget', 'tree', 'less', 'more'
 }
 
-
-@lru_cache(maxsize=10000)
-def is_readonly_command_cached(command: str) -> bool:
-    """Ultra-fast cached readonly command validation"""
-    if len(command) > 1000:
-        return False
-
-    # Quick pattern checks
-    dangerous_patterns = ['>', '<', '&', '|', ';', '$(', '`', 'rm ', 'mv ', 'cp ', 'chmod ', 'sudo ']
-    for pattern in dangerous_patterns:
-        if pattern in command:
-            return False
-
-    # Check first command
-    parts = command.split()
-    if not parts:
-        return False
-
-    base_cmd = parts[0]
-    return base_cmd in READONLY_COMMANDS
-
-
 # ========== Readonly Command Validation ==========
 READONLY_BASH_COMMANDS = {
     'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc', 'sort', 'uniq', 'cut', 'awk',
@@ -672,8 +641,8 @@ READONLY_BASH_COMMANDS = {
 }
 
 
-def is_readonly_command(command: str) -> bool:
-    """Enhanced readonly command validation - allows commands that only read data without modification"""
+def _is_readonly_command_single(command: str) -> bool:
+    """Check if a single command (no pipes) is readonly"""
     command = command.strip()
 
     # Quick cache check
@@ -686,12 +655,14 @@ def is_readonly_command(command: str) -> bool:
         'sed', 'diff', 'file', 'which', 'whereis', 'locate', 'du', 'df', 'pwd', 'whoami',
         'ps', 'top', 'htop', 'free', 'uname', 'hostname', 'date', 'uptime', 'history',
         'env', 'printenv', 'echo', 'printf', 'test', 'stat', 'lsof', 'netstat', 'ss',
-        'ifconfig', 'ip', 'ping', 'curl', 'wget', 'tree', 'less', 'more',
+        'ifconfig', 'ip', 'ping', 'curl', 'wget', 'tree', 'less', 'more', 'nl',
         'zcat', 'zless', 'zmore', 'bzcat', 'bzless', 'bzmore', 'xzcat', 'xzless', 'xzmore',
         'xxd', 'hexdump', 'od', 'strings', 'ldd', 'objdump', 'readelf', 'nm', 'size',
-        'python', 'python3', 'node', 'ruby', 'perl', 'php', 'java', 'javac', 'gcc', 'g++',
-        'clang', 'make', 'cmake', 'pip', 'npm', 'yarn', 'composer', 'bundle', 'gem',
-        'cargo', 'rustc', 'go', 'docker', 'kubectl', 'git'
+        # Removed: python, python3, node, ruby, perl, php - these execute arbitrary code
+        # Removed: java, javac, gcc, g++, clang, make, cmake - these compile/run code
+        # Removed: pip, npm, yarn, composer, bundle, gem, cargo, rustc, go - package managers that can install/run code
+        # Removed: docker, kubectl - container management (security risk)
+        'git', 'true', 'false', 'xargs', 'cd'
     }
 
     # Commands that are never allowed (modify data or run code)
@@ -703,30 +674,26 @@ def is_readonly_command(command: str) -> bool:
         'apt', 'yum', 'dnf', 'pacman', 'zypper', 'emerge', 'pkg', 'brew',
         'crontab', 'at', 'batch', 'nohup', 'screen', 'tmux',
         'export', 'unset', 'alias', 'unalias', 'source',
-        'kill', 'killall', 'pkill', 'killall5'
+        'kill', 'killall', 'pkill', 'killall5',
+        # Interpreters and compilers that execute arbitrary code
+        'python', 'python2', 'python3', 'node', 'nodejs', 'ruby', 'perl', 'php', 'bash', 'sh', 'zsh',
+        # Compilers and build tools
+        'java', 'javac', 'gcc', 'g++', 'clang', 'clang++', 'make', 'cmake', 'cc', 'c++',
+        # Package managers that can install/run code
+        'pip', 'pip2', 'pip3', 'npm', 'yarn', 'composer', 'bundle', 'gem', 'cargo', 'rustc', 'go',
+        # Container/VM management
+        'docker', 'podman', 'kubectl', 'vagrant', 'vboxmanage'
     }
 
     # Readonly subcommands for various tools
     readonly_subcommands = {
-        'pip': {'list', 'show', 'search', 'check', 'freeze', '--version', '-V'},
-        'npm': {'list', 'ls', 'show', 'info', 'search', 'view', '--version', '-v'},
-        'yarn': {'list', 'info', 'why', '--version', '-v'},
-        'composer': {'show', 'info', 'search', 'depends', 'why', '--version', '-V'},
-        'bundle': {'list', 'show', 'info', '--version', '-v'},
-        'gem': {'list', 'search', 'info', 'specification', '--version', '-v'},
-        'cargo': {'search', 'tree', '--version', '-V'},
-        'go': {'list', 'version', 'env'},
-        'docker': {'images', 'ps', 'version', 'info', 'stats'},
-        'kubectl': {'get', 'describe', 'logs', 'version', 'cluster-info'},
-        'git': {'log', 'show', 'diff', 'status', 'branch', 'remote', 'config', 'blame', 'shortlog'},
-        'make': {'-n', '--dry-run', '--just-print', '--recon', '--what-if'}
+        # Only git has readonly subcommands now (other interpreters/tools removed from readonly_commands)
+        'git': {'log', 'show', 'diff', 'status', 'branch', 'remote', 'config', 'blame', 'shortlog', 'grep', 'ls-files',
+                'ls-tree', 'rev-parse', 'describe', 'tag', 'cat-file', 'rev-list'},
     }
 
     # Patterns that indicate write operations or code execution
     dangerous_patterns = [
-        r'>(?!>)',  # Output redirection
-        r'>>',  # Append redirection
-        r'<',  # Input redirection
         r'\$\(',  # Command substitution
         r'`',  # Backtick substitution
         r'eval\s',  # eval commands
@@ -737,6 +704,29 @@ def is_readonly_command(command: str) -> bool:
     for pattern in dangerous_patterns:
         if re.search(pattern, command):
             return False
+
+    # Check for redirections (but allow redirecting to /dev/null)
+    # Allow: 2>/dev/null, 1>/dev/null, >/dev/null (safe - just discards output)
+    # Block: >file, >>file, 2>file, etc.
+    # Also ignore < and > inside quoted strings (they're part of patterns/arguments)
+
+    # First, temporarily remove safe /dev/null redirections to check for dangerous ones
+    cmd_check = command
+    cmd_check = re.sub(r'[012]?>/dev/null', '', cmd_check)
+    cmd_check = re.sub(r'[012]?>>/dev/null', '', cmd_check)
+
+    # Remove quoted strings (both single and double quotes) to avoid false positives
+    # This prevents < and > inside quotes from being treated as redirections
+    cmd_check_no_quotes = re.sub(r'"[^"]*"', '', cmd_check)  # Remove double-quoted strings
+    cmd_check_no_quotes = re.sub(r"'[^']*'", '', cmd_check_no_quotes)  # Remove single-quoted strings
+
+    # Now check if there are any remaining dangerous redirections OUTSIDE quotes
+    if re.search(r'>(?!>)', cmd_check_no_quotes):  # Single > (not >>)
+        return False
+    if re.search(r'>>', cmd_check_no_quotes):  # Append >>
+        return False
+    if re.search(r'<', cmd_check_no_quotes):  # Input redirection
+        return False
 
     # Parse command safely
     try:
@@ -750,32 +740,50 @@ def is_readonly_command(command: str) -> bool:
         if base_cmd in dangerous_commands:
             return False
 
+        # Special handling for find -exec
+        if base_cmd == 'find' and '-exec' in cmd_parts:
+            try:
+                exec_idx = cmd_parts.index('-exec')
+                # Find the terminator (shlex.split converts \; to ;)
+                # Look for: ; (from \;), + (from -exec ... +), or ';' token
+                semicolon_idx = None
+                for i in range(exec_idx + 1, len(cmd_parts)):
+                    part = cmd_parts[i]
+                    # Check for terminators: ; or + or \;
+                    # After shlex.split, \; becomes ;
+                    if part in [';', '+'] or part == '\\;':
+                        semicolon_idx = i
+                        break
+
+                if semicolon_idx is not None:
+                    # Extract the exec command (between -exec and terminator)
+                    exec_cmd_parts = cmd_parts[exec_idx + 1:semicolon_idx]
+                    if exec_cmd_parts:
+                        # Filter out {} placeholder
+                        exec_cmd_parts = [p for p in exec_cmd_parts if p != '{}']
+                        if exec_cmd_parts:
+                            # Validate that the exec'd command is readonly
+                            exec_cmd = ' '.join(exec_cmd_parts)
+                            if _is_readonly_command_single(exec_cmd):
+                                return True
+                            else:
+                                return False
+                # If no terminator found or no exec command, fall through to normal validation
+            except (ValueError, IndexError):
+                pass  # Fall through to normal validation
+
         # Check if base command is in readonly list
         if base_cmd in readonly_commands:
-            # For commands with subcommands, check if subcommand is readonly
+            # For commands with subcommands (e.g., git), check if subcommand is readonly
             if base_cmd in readonly_subcommands and len(cmd_parts) > 1:
                 subcommand = cmd_parts[1]
                 # Allow if subcommand is in readonly list OR if it's a flag/option
                 if subcommand in readonly_subcommands[base_cmd] or subcommand.startswith('-'):
                     return True
-                # For pip, npm, etc., check for readonly patterns
-                if base_cmd == 'pip' and subcommand in {'list', 'show', 'search', 'check', 'freeze'}:
-                    return True
-                if base_cmd == 'npm' and subcommand in {'list', 'ls', 'show', 'info', 'search', 'view'}:
-                    return True
-                if base_cmd == 'git' and subcommand in {'log', 'show', 'diff', 'status', 'branch', 'remote', 'config',
-                                                        'blame', 'shortlog'}:
-                    return True
-                # If subcommand is not explicitly readonly, check if it contains install/modify keywords
-                dangerous_subcommands = {'install', 'uninstall', 'update', 'upgrade', 'remove', 'add', 'delete', 'set',
-                                         'config', 'init', 'create', 'push', 'pull', 'commit', 'merge', 'rebase'}
-                if subcommand in dangerous_subcommands:
-                    return False
-                # Allow version checks and help
-                if subcommand in {'--version', '-v', '-V', '--help', '-h'}:
-                    return True
+                # If subcommand is not explicitly readonly, block it
+                return False
             else:
-                # Simple command without subcommands
+                # Simple command without subcommands (e.g., ls, cat, grep)
                 return True
 
         # Check against whitelist patterns
@@ -787,8 +795,178 @@ def is_readonly_command(command: str) -> bool:
         # If we get here, command is not recognized as readonly
         return False
 
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError) as e:
+        # shlex.split() can fail on malformed quotes or special characters
+        # Try a fallback: check if base command is safe
+        # (re is already imported at module level)
+        # Extract first word as base command
+        match = re.match(r'^\s*(\S+)', command)
+        if match:
+            base_cmd = match.group(1)
+            # Check if it's in readonly commands
+            if base_cmd in readonly_commands:
+                # For common commands like grep, allow them even with parsing issues
+                # as long as there are no dangerous patterns
+                return True
         return False
+
+
+def is_readonly_command(command: str) -> bool:
+    """Enhanced readonly command validation - allows commands that only read data without modification.
+    Handles piped commands, logical operators (||, &&), and semicolon-separated commands."""
+    command = command.strip()
+
+    # Quick cache check
+    if len(command) > 1000:  # Prevent extremely long commands
+        return False
+
+    # Special handling for find -exec with escaped semicolon before pipe parsing
+    # This prevents shlex.split from consuming the backslash in \;
+    # Pattern: find ... -exec ... \; (possibly followed by pipe, logical ops, etc.)
+    if 'find' in command and '-exec' in command and r'\;' in command:
+        import re
+        # Extract and validate each piped/chained command separately
+        # Split by pipes and logical operators, but NOT those inside quotes
+        # This regex splits by ||, &&, or | but only outside of quoted strings
+        parts = re.split(r'\s*(\|\||&&|\|)(?=(?:[^"\']*["\'][^"\']*["\'])*[^"\']*$)\s*', command)
+        commands = []
+        operators = []
+        for i, part in enumerate(parts):
+            if i % 2 == 0:  # Command parts (not operators)
+                if part.strip():
+                    commands.append(part.strip())
+            else:  # Operators
+                operators.append(part.strip())
+
+        # Validate each command
+        for cmd in commands:
+            # For find -exec commands, validate specially without shlex.split
+            if 'find' in cmd and '-exec' in cmd and r'\;' in cmd:
+                # Extract the -exec portion
+                exec_match = re.search(r'-exec\s+(.+?)\s*\\;', cmd)
+                if exec_match:
+                    exec_cmd = exec_match.group(1).strip()
+                    # Remove {} placeholder
+                    exec_cmd = re.sub(r'\{\}', '', exec_cmd).strip()
+                    # Validate the executed command is readonly
+                    if not _is_readonly_command_single(exec_cmd):
+                        return False
+                else:
+                    return False  # Malformed find -exec
+            else:
+                # Regular command validation
+                if not _is_readonly_command_single(cmd):
+                    return False
+        return True
+
+    # First, handle semicolon-separated commands (;)
+    # Split by ; but be careful about quoted strings and escaped semicolons (\;)
+    if ';' in command:
+        # Check if it's escaped semicolon (\;) used by find -exec
+        # Don't split on \; (escaped semicolon) - it's part of find -exec syntax
+        import re
+        # Split by ; that's not inside quotes and not preceded by backslash
+        # This regex looks for ; that's not preceded by \ and not inside quotes
+        semicolon_parts = re.split(r'(?<!\\);(?=(?:[^"]*"[^"]*")*[^"]*$)', command)
+
+        # If we only got one part, it means all semicolons are escaped (like \;)
+        # In that case, don't split - treat as a single command
+        if len(semicolon_parts) == 1:
+            # Continue to normal validation below
+            pass
+        else:
+            # We have actual command separators, validate each part
+            for part in semicolon_parts:
+                part = part.strip()
+                if part:
+                    # Recursively check each semicolon-separated part
+                    if not is_readonly_command(part):
+                        return False
+            return True
+
+    # Parse the command to distinguish operators from literal strings
+    # This prevents treating quoted "||" or "true" as operators
+    try:
+        import shlex
+        cmd_parts = shlex.split(command)
+
+        # Check if || or && appear as separate tokens (operators), not as part of arguments
+        has_logical_op = False
+        logical_op_positions = []
+        for i, part in enumerate(cmd_parts):
+            if part == '||' or part == '&&':
+                has_logical_op = True
+                logical_op_positions.append(i)
+
+        if has_logical_op:
+            # Split command by logical operators (they appear as separate tokens)
+            # Reconstruct the original command parts
+            commands = []
+            start = 0
+            for pos in logical_op_positions:
+                # Command before the operator
+                if pos > start:
+                    commands.append(' '.join(cmd_parts[start:pos]))
+                start = pos + 1
+            # Command after the last operator
+            if start < len(cmd_parts):
+                commands.append(' '.join(cmd_parts[start:]))
+
+            # All commands separated by || or && must be readonly
+            for cmd in commands:
+                cmd = cmd.strip()
+                if cmd:  # Skip empty commands
+                    if not _is_readonly_command_single(cmd):
+                        return False
+            return True
+
+        # Check for pipe operator | (as a separate token)
+        pipe_positions = [i for i, part in enumerate(cmd_parts) if part == '|']
+        if pipe_positions:
+            # Split command by pipe operators
+            commands = []
+            start = 0
+            for pos in pipe_positions:
+                if pos > start:
+                    commands.append(' '.join(cmd_parts[start:pos]))
+                start = pos + 1
+            if start < len(cmd_parts):
+                commands.append(' '.join(cmd_parts[start:]))
+
+            # All commands in the pipeline must be readonly
+            for cmd in commands:
+                cmd = cmd.strip()
+                if cmd:
+                    if not _is_readonly_command_single(cmd):
+                        return False
+            return True
+
+    except (ValueError, AttributeError):
+        # If parsing fails, fall back to regex-based detection
+        # Handle logical operators (||, &&) - split and validate each command
+        if '||' in command or '&&' in command:
+            import re
+            parts = re.split(r'\s*\|\|\s*|\s*&&\s*', command)
+            for part in parts:
+                part = part.strip()
+                if part:
+                    if not _is_readonly_command_single(part):
+                        return False
+            return True
+
+        # Handle piped commands - split by single pipe | (not ||)
+        if '|' in command and not command.strip().startswith('|') and not command.strip().endswith('|'):
+            import re
+            pipe_commands = re.split(r'(?<!\|)\|(?!\|)', command)
+            for pipe_cmd in pipe_commands:
+                pipe_cmd = pipe_cmd.strip()
+                if pipe_cmd:
+                    if not _is_readonly_command_single(pipe_cmd):
+                        return False
+            return True
+
+    # For non-piped commands, use the single command checker
+    return _is_readonly_command_single(command)
 
 
 @lru_cache(maxsize=5000)
@@ -890,7 +1068,9 @@ class VirtualFilesystem:
 
         # Simple but effective pattern: match /path but not when preceded by -
         # and not when followed by shell operators
-        path_pattern = r'(?<!-)(/[a-zA-Z0-9_./-]+)(?=\s|$|\||>|<|&|;|\)|\])'
+        # IMPORTANT: Don't match /path when it's part of a relative path like "requests/models.py"
+        # Only match absolute paths that start at the beginning of a word boundary or after whitespace/operators
+        path_pattern = r'(?<![a-zA-Z0-9_./-])(/[a-zA-Z0-9_./-]+)(?=\s|$|\||>|<|&|;|\)|\])'
         result = re.sub(path_pattern, replace_path, result)
 
         # Handle quoted paths
@@ -938,7 +1118,7 @@ def resolve_path_cached(path: str, base_dir: str) -> str:
 
 
 # ========== High-Performance Action Processors ==========
-async def execute_bash_ultrafast(data: CmdRunAction, base_dir: str, execution_id: str) -> RunActionResponse:
+async def execute_bash(data: CmdRunAction, base_dir: str, execution_id: str) -> RunActionResponse:
     """Ultra-fast bash execution with minimal overhead"""
     start_time = time.time()
 
@@ -1042,7 +1222,7 @@ async def execute_bash_ultrafast(data: CmdRunAction, base_dir: str, execution_id
         )
 
 
-async def file_editor_ultrafast(data: FileEditorAction, base_dir: str, execution_id: str) -> RunActionResponse:
+async def file_editor(data: FileEditorAction, base_dir: str, execution_id: str) -> RunActionResponse:
     """Ultra-fast file editor with minimal overhead"""
     start_time = time.time()
 
@@ -1159,8 +1339,8 @@ async def file_editor_ultrafast(data: FileEditorAction, base_dir: str, execution
 # ========== Action Registry ==========
 ACTION_REGISTRY = {
     'code_act': {
-        'execute_bash': execute_bash_ultrafast,
-        'str_replace_editor': file_editor_ultrafast,
+        'execute_bash': execute_bash,
+        'str_replace_editor': file_editor,
     }
 }
 
@@ -1362,8 +1542,8 @@ if __name__ == "__main__":
     # Ultra-high performance configuration
     uvicorn.run(
         app,
-        host="::",
-        port=8000,
+        host="0.0.0.0",  # Bind to all interfaces (IPv4 and IPv6)
+        port=8111,
         workers=1,
         loop="asyncio",
         log_level="warning",
