@@ -15,18 +15,15 @@ from pydantic import BaseModel
 from typing import Any, Optional
 import asyncio, httpx
 from envs.local_search import LocalSearch
+from envs.repo_env import GymEnv
 
 
 def select_env(ability, config, extra_info=None):
     # Select env
-    if ability == 'swe':
-        EnvClass = None  # TODO docker env
-    elif ability == 'swe_loc':
-        EnvClass = None  # TODO read-only swe env
-    elif 'LocalSearch' in ability:
+    if 'LocalSearch' in ability:
         EnvClass = LocalSearch
     else:
-        EnvClass = LocalSearch
+        EnvClass = GymEnv
     return EnvClass
 
 
@@ -527,6 +524,8 @@ async def run_action(env, response):
             action, arguments = env_return['action'], env_return.get('arguments', {})
             if action == 'finish':
                 return None
+        elif env_return.get('observation', None) == 'finish':
+            return None
         observation = env_return.pop('observation', 'Empty')
     except Exception as e:
         observation = f"Error: {e}"
