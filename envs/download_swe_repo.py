@@ -2,6 +2,8 @@
 # clone_swebench_verified_v2_mp.py
 #
 # pip install datasets gitpython tqdm filelock
+# python download_swe_repo.py --dataset princeton-nlp/SWE-bench_Verified --split test
+# python download_swe_repo.py --dataset SWE-Gym/SWE-Gym --split train
 
 import os, shutil, subprocess, tempfile, argparse, json
 from pathlib import Path
@@ -9,7 +11,6 @@ from datasets import load_dataset
 from tqdm import tqdm
 from filelock import FileLock
 from multiprocessing import Pool, cpu_count
-
 
 DATA_DIR = Path("gym_data")  # snapshots per instance
 CACHE_DIR = Path("_repo_cache")  # bare/partial repos (shared among workers)

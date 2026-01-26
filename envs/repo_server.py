@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-High-Performance Code Execution Server
-- Pre-allocated worker thread pool (3000+ threads)
-- Multiple event loops for load distribution
-- Lock-free queues and connection pooling
-- Removed rate limiting bottlenecks
-- Batch processing capabilities
-"""
-
 import asyncio
 import concurrent.futures
 import logging
@@ -1127,7 +1118,7 @@ def resolve_path_cached(path: str, base_dir: str) -> str:
 
 
 # ========== High-Performance Action Processors ==========
-async def execute_bash_ultrafast(data: CmdRunAction, base_dir: str, execution_id: str) -> RunActionResponse:
+async def execute_bash(data: CmdRunAction, base_dir: str, execution_id: str) -> RunActionResponse:
     """Ultra-fast bash execution with minimal overhead"""
     start_time = time.time()
 
@@ -1231,7 +1222,7 @@ async def execute_bash_ultrafast(data: CmdRunAction, base_dir: str, execution_id
         )
 
 
-async def file_editor_ultrafast(data: FileEditorAction, base_dir: str, execution_id: str) -> RunActionResponse:
+async def file_editor(data: FileEditorAction, base_dir: str, execution_id: str) -> RunActionResponse:
     """Ultra-fast file editor with minimal overhead"""
     start_time = time.time()
 
@@ -1348,8 +1339,8 @@ async def file_editor_ultrafast(data: FileEditorAction, base_dir: str, execution
 # ========== Action Registry ==========
 ACTION_REGISTRY = {
     'code_act': {
-        'execute_bash': execute_bash_ultrafast,
-        'str_replace_editor': file_editor_ultrafast,
+        'execute_bash': execute_bash,
+        'str_replace_editor': file_editor,
     }
 }
 
@@ -1552,7 +1543,7 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",  # Bind to all interfaces (IPv4 and IPv6)
-        port=8011,
+        port=8111,
         workers=1,
         loop="asyncio",
         log_level="warning",

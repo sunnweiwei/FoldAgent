@@ -34,7 +34,7 @@ cd envs && python search_server.py \
   --corpus Tevatron/browsecomp-plus-corpus \
   --corpus-embedding-dataset miaolu3/browsecomp-plus \
   --host 0.0.0.0 \
-  --port 8000
+  --port 8010
 ```
 
 Set environment variables:
@@ -140,7 +140,8 @@ python scripts/eval_bc.py \
 ```
 
 ### Evaluation and training on SWE-Bench Verified
-Coming soon
+
+
 
 ## Cite
 
