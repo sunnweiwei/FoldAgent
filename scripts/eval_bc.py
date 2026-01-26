@@ -54,7 +54,7 @@ def parse_args():
 
 
 async def eval_one(row, config, tokenizer, model_name):
-    llm_client = CallAPI(url=model_name, tokenizer=tokenizer, config=config)
+    llm_client = CallAPI(url=model_name, tokenizer=tokenizer, config=config.actor_rollout_ref.rollout)
     context = TaskContext(config=config, global_step=0, llm_client=llm_client, is_train=False, tokenizer=tokenizer)
 
     item = DataProto()
