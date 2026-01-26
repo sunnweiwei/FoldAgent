@@ -4,6 +4,8 @@ Paper: https://arxiv.org/pdf/2510.11967
 
 <img width="4239" height="4110" alt="cover" src="https://github.com/user-attachments/assets/9c9c0b67-ccd8-4a4b-859b-22f613f41954" />
 
+---
+
 ## Training
 
 Note: This is an open-source re-implementation based on `agent_loop` in verl. This may differ from the code we used to train the model in our paper.
@@ -57,6 +59,8 @@ Example script to train Qwen3-8B:
 ```bash
 bash scripts/train_bc_qwen3_8b.sh
 ```
+
+---
 
 ## Evaluation
 
@@ -141,7 +145,7 @@ python scripts/eval_bc.py \
 
 ### Evaluation and training on SWE-Bench Verified
 
-
+---
 
 ## Cite
 
@@ -153,3 +157,9 @@ python scripts/eval_bc.py \
   year    = {2025},
 }
 ```
+
+---
+
+## Acknowledgements
+
+This implementation is based on [verl](https://github.com/volcengine/verl).
