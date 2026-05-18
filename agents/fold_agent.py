@@ -354,7 +354,7 @@ async def process_item(
                 'agent_name': name,
                 'message_str': print_chat(session_message),
                 'meta_info': f"N: {len(agent)} | {name}",
-                'process_reward_mask': out['response_mask'],
+                'process_reward_mask': out['process_reward_mask'],
                 'uid': uid,
                 'gen_uid': gen_uid,
             }
