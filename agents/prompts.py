@@ -1,5 +1,4 @@
 from .tool_spec import convert_tools_to_description, codeact_tool, search_tool, branch_tool, TOOL_PROMPT, PARALLEL_TOOL_PROMPT
-from .search_example import SEARCH_EXAMPLE, SEARCH_BRANCH_EXAMPLE
 
 def create_chat(problem_statement, workflow=None, item=None):
     if workflow == 'code':
@@ -38,6 +37,7 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         # TODO
         return None
     elif workflow == 'search':
+        from .search_example import SEARCH_EXAMPLE, SEARCH_BRANCH_EXAMPLE
         tool_description = PARALLEL_TOOL_PROMPT.format(description=convert_tools_to_description(search_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT + '\n\n' + tool_description
         problem_statement = SEARCH_USER_PROMPT.format(Question=problem_statement)
@@ -52,6 +52,7 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_multi':
+        from .search_example import SEARCH_EXAMPLE, SEARCH_BRANCH_EXAMPLE
         tool_description = PARALLEL_TOOL_PROMPT.format(description=convert_tools_to_description(search_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT + '\n\n' + tool_description
         problem_statement = ("The following are multiple questions you need to answer. You should find answers for all of them. After collecting the answers, submit them using the `finish` tool. In the `answer` field, include responses for every question, wrapped with <qn></qn> tags. For example: "
@@ -61,6 +62,7 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_branch':
+        from .search_example import SEARCH_EXAMPLE, SEARCH_BRANCH_EXAMPLE
         tool_description = PARALLEL_TOOL_PROMPT.format(
             description=convert_tools_to_description(search_tool() + branch_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT_BRANCH + '\n\n' + tool_description
@@ -69,6 +71,7 @@ I've uploaded a python code repository in the directory /testbed. Consider the f
         chat = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_prompt}]
         return chat
     elif workflow == 'search_branch_multi':
+        from .search_example import SEARCH_EXAMPLE, SEARCH_BRANCH_EXAMPLE
         tool_description = PARALLEL_TOOL_PROMPT.format(
             description=convert_tools_to_description(search_tool() + branch_tool()))
         system_prompt = SEARCH_SYSTEM_PROMPT_BRANCH + '\n\n' + tool_description

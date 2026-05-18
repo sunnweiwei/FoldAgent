@@ -194,9 +194,11 @@ class ActorConfig(BaseConfig):
     def validate(self, n_gpus: int, train_batch_size: int, model_config: dict = None):
         """Validate actor configuration with runtime parameters."""
         if not self.use_dynamic_bsz:
-            if train_batch_size < self.ppo_mini_batch_size:
+            effective_batch_size = train_batch_size * self.rollout_n
+            if effective_batch_size < self.ppo_mini_batch_size:
                 raise ValueError(
-                    f"train_batch_size ({train_batch_size}) must be >= "
+                    f"train_batch_size * rollout_n ({train_batch_size} * {self.rollout_n} = "
+                    f"{effective_batch_size}) must be >= "
                     f"actor.ppo_mini_batch_size ({self.ppo_mini_batch_size})"
                 )
 
