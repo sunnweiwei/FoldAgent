@@ -36,7 +36,7 @@ cd envs && python search_server.py \
   --corpus Tevatron/browsecomp-plus-corpus \
   --corpus-embedding-dataset miaolu3/browsecomp-plus \
   --host 0.0.0.0 \
-  --port 8010
+  --port 8000
 ```
 
 Set environment variables:
