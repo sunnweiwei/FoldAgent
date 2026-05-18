@@ -43,7 +43,7 @@ Set environment variables:
 
 ```bash
 # URL of the local search server (for BrowseComp-Plus)
-export LOCAL_SEARCH_URL="http://[IP-of-search-server]:8010"
+export LOCAL_SEARCH_URL="http://[IP-of-search-server]:8000"
 
 # For LLM-based answer grading
 export OPENAI_API_KEY="your-api-key"
