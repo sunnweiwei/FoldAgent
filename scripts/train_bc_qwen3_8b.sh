@@ -15,7 +15,7 @@ python -m scripts.train_fold \
   actor_rollout_ref.rollout.name=vllm \
   actor_rollout_ref.rollout.mode=async \
   actor_rollout_ref.rollout.calculate_log_probs=True \
-  actor_rollout_ref.model.path= ${MODEL_PATH} \
+  actor_rollout_ref.model.path=${MODEL_PATH} \
   actor_rollout_ref.rollout.prompt_length=${PROMPT_LENGTH} \
   actor_rollout_ref.rollout.response_length=${RESPONSE_LENGTH} \
   actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=${MAX_LENGTH} \
