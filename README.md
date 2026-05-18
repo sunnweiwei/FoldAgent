@@ -143,7 +143,35 @@ python scripts/eval_bc.py \
   --output_dir results
 ```
 
-### Evaluation and training on SWE-Bench Verified
+### Evaluation on SWE-Bench Verified
+
+Each instance runs in a [Modal](https://modal.com) sandbox built from the prebuilt `swebench/sweb.eval.x86_64.<instance>:latest` image.
+
+**1. Setup**
+
+```bash
+pip install modal datasets
+modal token new
+export OPENAI_API_KEY='your-key'
+```
+
+**2. Evaluate on SWE-Bench Verified**
+
+```bash
+python scripts/eval_swe.py \
+  --dataset princeton-nlp/SWE-bench_Verified \
+  --split test \
+  --model_name gpt-5.4-mini \
+  --num_workers 32 \
+  --workflow code \
+  --max_turn 200 \
+  --val_max_turn 200 \
+  --max_session 10 \
+  --val_max_session 10 \
+  --output_dir results
+```
+
+Add `--instance_ids id1,id2` or `--limit N` for a subset.
 
 ---
 

@@ -22,6 +22,9 @@ def select_env(ability, config, extra_info=None):
     # Select env
     if 'LocalSearch' in ability:
         EnvClass = LocalSearch
+    elif ability.startswith('SWEModalEnv@') or 'SWEModalEnv' in ability:
+        from envs.swe_modal_env import SWEModalEnv
+        EnvClass = SWEModalEnv
     else:
         EnvClass = GymEnv
     return EnvClass
