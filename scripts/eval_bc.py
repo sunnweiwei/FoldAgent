@@ -46,8 +46,10 @@ def parse_args():
                         help='Model name for API (e.g., gpt-5-nano, gpt-4o, or vLLM model path) (default: gpt-5-nano)')
     parser.add_argument('--num_workers', type=int, default=150,
                         help='Number of parallel evaluation workers (default: 150)')
-    parser.add_argument('--local_search_url', default='http://localhost:8000',
-                        help='URL of the local search server (default: http://localhost:8000)')
+    parser.add_argument('--local_search_url',
+                        default=os.environ.get('LOCAL_SEARCH_URL', 'http://localhost:8000'),
+                        help='URL of the local search server. Falls back to $LOCAL_SEARCH_URL, '
+                             'then http://localhost:8000.')
     parser.add_argument('--enable_summary', action='store_true',
                         help='Enable summary mode (use with workflow=search for Summary agent)')
     return parser.parse_args()
